@@ -24,6 +24,7 @@ namespace Jus
         readonly Control ui = new Control();
         readonly BatteryMonitor monitor = new BatteryMonitor();
         readonly TaskbarWidget widget = new TaskbarWidget();
+        readonly DeviceChangeWindow devices = new DeviceChangeWindow();
         readonly NotifyIcon tray = new NotifyIcon();
         readonly PanelMenu menu = new PanelMenu();
         readonly MenuTheme theme = new MenuTheme();
@@ -60,10 +61,11 @@ namespace Jus
             tray.Text = "Jus";
             tray.ContextMenuStrip = menu;
             tray.Visible = true;
-            tray.MouseUp += (s, e) => { if (e.Button == MouseButtons.Left) OpenMenu(); };
-            widget.Clicked += OpenMenu;
+            tray.MouseUp += (s, e) => { if (e.Button == MouseButtons.Left) OpenMenu(Cursor.Position); };
+            widget.Clicked += () => OpenMenu(widget.PanelAnchor);
 
             monitor.Updated += list => ui.BeginInvoke((Action)(() => Apply(list)));
+            devices.Changed += monitor.DevicesChanged;
             monitor.Start();
 
             quitWait = ThreadPool.RegisterWaitForSingleObject(quit, (s, t) => ui.BeginInvoke((Action)Quit), null, -1, true);
@@ -73,6 +75,7 @@ namespace Jus
         {
             readings = list;
             widget.Show(list.Where(r => !settings.Hidden.Contains(r.Id)));
+            if (menu.Visible) Fill(menu, theme, readings, settings.Hidden, settings.Alerts, Installer.AutoStart, actions); // le panneau reste à jour s'il est ouvert
             tray.Text = Shorten(list.Count == 0 ? "Jus : aucun appareil détecté" : string.Join("\n", list.Select(r => r.Name + " : " + r.Text)));
 
             foreach (BatteryReading r in list)
@@ -87,12 +90,12 @@ namespace Jus
         /// <summary>NotifyIcon.Text lève une exception à partir de 64 caractères.</summary>
         static string Shorten(string s) => s.Length <= 63 ? s : s.Substring(0, 62) + "…";
 
-        void OpenMenu()
+        void OpenMenu(Point at)
         {
             if (menu.Visible) { menu.Close(); return; }
             if (menu.JustDismissed) return;
             Native.SetForegroundWindow(ui.Handle);
-            menu.Show(Cursor.Position, ToolStripDropDownDirection.AboveLeft);
+            menu.Show(at, ToolStripDropDownDirection.AboveLeft);
         }
 
         /// <summary>Remplit le panneau. Séparé de l'appli pour que --preview-menu dessine exactement le même.</summary>
@@ -117,7 +120,11 @@ namespace Jus
             menu.Items.Add(Toggle("Lancer avec Windows", autoStart, actions.ToggleAutoStart));
             menu.Items.Add(Entry("Quitter", actions.Quit));
             menu.Items.Add(new ToolStripSeparator());
-            ToolStripMenuItem sig = Entry("un projet du bored dev playground", () => Process.Start(new ProcessStartInfo("https://ghermin.github.io/") { UseShellExecute = true }));
+            ToolStripMenuItem sig = Entry("un projet du bored dev playground", () =>
+            {
+                menu.Close();
+                Process.Start(new ProcessStartInfo("https://ghermin.github.io/") { UseShellExecute = true });
+            });
             sig.Font = MenuTheme.MonoFont;
             sig.Tag = "sig";
             menu.Items.Add(sig);
@@ -141,6 +148,7 @@ namespace Jus
         {
             ToolStripMenuItem item = Entry(text, run);
             item.Checked = on;
+            item.CheckOnClick = true; // la coche change sur place, le panneau reste ouvert
             return item;
         }
 
@@ -152,6 +160,22 @@ namespace Jus
             tray.Visible = false;
             tray.Dispose();
             ExitThread();
+        }
+    }
+
+    /// <summary>Fenêtre invisible que Windows prévient dès qu'un appareil est branché ou retiré.</summary>
+    sealed class DeviceChangeWindow : NativeWindow
+    {
+        const int WM_DEVICECHANGE = 0x219;
+
+        public event Action Changed;
+
+        public DeviceChangeWindow() { CreateHandle(new CreateParams { Caption = "Jus.Devices" }); }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_DEVICECHANGE) Changed?.Invoke();
+            base.WndProc(ref m);
         }
     }
 

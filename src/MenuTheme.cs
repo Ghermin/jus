@@ -158,15 +158,17 @@ namespace Jus
     /// <summary>Panneau de largeur fixe, quelle que soit la longueur des noms d'appareils.</summary>
     sealed class PanelMenu : ContextMenuStrip
     {
-        const int VK_LBUTTON = 1, VK_RBUTTON = 2, VK_MBUTTON = 4, VK_ESCAPE = 0x1B, GraceMs = 300, ReopenMs = 600;
+        const int VK_LBUTTON = 1, VK_RBUTTON = 2, VK_MBUTTON = 4, ReopenMs = 600;
 
         readonly Timer watch = new Timer { Interval = 40 };
-        readonly uint ownProcess = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
         bool wasDown;
-        IntPtr foreground;
-        int openedAt, dismissedAt = Environment.TickCount - ReopenMs;
+        int dismissedAt = Environment.TickCount - ReopenMs;
 
-        public PanelMenu() { watch.Tick += (s, e) => Watch(); }
+        public PanelMenu()
+        {
+            AutoClose = false; // ni le survol ni les boutons ne ferment le panneau
+            watch.Tick += (s, e) => Watch();
+        }
 
         /// <summary>Le clic qui vient de fermer le panneau ne doit pas le rouvrir en arrivant sur le widget.</summary>
         public bool JustDismissed => Environment.TickCount - dismissedAt < ReopenMs;
@@ -178,8 +180,6 @@ namespace Jus
         {
             base.OnOpened(e);
             wasDown = AnyButtonDown();
-            foreground = Native.GetForegroundWindow();
-            openedAt = Environment.TickCount;
             watch.Start();
         }
 
@@ -189,26 +189,13 @@ namespace Jus
             base.OnClosed(e);
         }
 
-        /// <summary>
-        /// Ouvert depuis la barre des tâches, le panneau n'a pas le focus : Windows ne le ferme donc jamais tout seul.
-        /// On surveille nous-mêmes les clics à côté, la touche Échap et le changement de fenêtre active.
-        /// </summary>
+        /// <summary>Seule façon de fermer le panneau : un clic en dehors de sa fenêtre.</summary>
         void Watch()
         {
             bool down = AnyButtonDown();
             bool pressed = down && !wasDown;
             wasDown = down;
-            if ((pressed && !Bounds.Contains(Cursor.Position)) || IsDown(VK_ESCAPE)) { Dismiss(); return; }
-
-            IntPtr now = Native.GetForegroundWindow();
-            if (Environment.TickCount - openedAt < GraceMs) { foreground = now; return; } // le clic d'ouverture active encore la barre
-            if (now == foreground || now == IntPtr.Zero) return;
-            Native.GetWindowThreadProcessId(now, out uint process);
-            if (process != ownProcess) Dismiss();
-        }
-
-        void Dismiss()
-        {
+            if (!pressed || Bounds.Contains(Cursor.Position)) return;
             dismissedAt = Environment.TickCount;
             Close(ToolStripDropDownCloseReason.CloseCalled);
         }
@@ -290,7 +277,7 @@ namespace Jus
             bool low = reading.IsLow;
             Color text = shown ? p.Text : p.Muted;
             Color tone = low && shown ? p.Low : text;
-            string value = reading.PluggedIn ? "Branchée" : reading.NoLevel ? "Niveau inconnu" : reading.Text;
+            string value = reading.PluggedIn ? "Branchée" : reading.NoLevel ? "Sans fil" : reading.Text;
             Font valueFont = reading.NoLevel ? MenuTheme.TextFont : MenuTheme.TitleFont;
             Color valueColor = reading.PluggedIn ? text : reading.NoLevel ? p.Muted : tone;
 
@@ -304,9 +291,10 @@ namespace Jus
             int percentX = (int)(right - size.Width);
             TextRenderer.DrawText(g, value, valueFont, new Rectangle(percentX, top, size.Width + 2, line), valueColor, Flat);
             float reserved = size.Width + 14 * s;
-            if (reading.PluggedIn)
+            if (reading.NoLevel)
             {
-                Glyphs.Plug(g, percentX - 18 * s, top + (line - 14 * s) / 2, 14 * s, text);
+                if (reading.PluggedIn) Glyphs.Plug(g, percentX - 18 * s, top + (line - 14 * s) / 2, 14 * s, text);
+                else Glyphs.Wireless(g, percentX - 18 * s, top + (line - 14 * s) / 2, 14 * s, valueColor);
                 reserved += 18 * s;
             }
             if (reading.Charging)

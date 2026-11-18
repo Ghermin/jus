@@ -10,16 +10,7 @@ Le pourcentage de batterie de ta souris, ton casque, tes écouteurs, ta manette 
 
 ## Appareils
 
-| Famille | Appareils | État |
-| --- | --- | --- |
-| Logitech | Souris et claviers sur récepteur Bolt, Lightspeed ou Unifying | Testé (Lift, Bolt) |
-| SteelSeries | Casques Arctis Nova 7 | Testé |
-| Bluetooth | Tout appareil dont Windows connaît la batterie | Lecture testée |
-| Xbox et compatibles | Manettes XInput sans fil, par paliers | À confirmer |
-| PlayStation | DualSense, DualSense Edge, DualShock 4 | À confirmer |
-| Razer | Souris et claviers sans fil | Expérimental |
-| HID standard | Appareils qui déclarent leur batterie, onduleurs compris | À confirmer |
-| PC portable | La batterie de l'ordinateur | À confirmer |
+Souris, claviers, casques, écouteurs, manettes et PC portables. Jus repère tout seul ce qui est connecté, et un appareil éteint ou retiré disparaît de la barre.
 
 Un appareil manque ? Lance `Jus.exe --scan jus-scan.txt` et joins le fichier à une issue, après l'avoir relu : il liste tes appareils.
 

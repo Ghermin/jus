@@ -17,12 +17,17 @@ namespace Jus
         const int WS_EX_LAYERED = 0x80000, WS_EX_TOOLWINDOW = 0x80, WS_EX_NOACTIVATE = 0x08000000;
         const uint SWP_NOACTIVATE = 0x10, SWP_SHOWWINDOW = 0x40, SWP_HIDEWINDOW = 0x80;
         const int WM_LBUTTONUP = 0x202, WM_RBUTTONUP = 0x205, WM_MOUSEACTIVATE = 0x21, MA_NOACTIVATE = 3;
+        const int WM_MOUSEMOVE = 0x200, WM_MOUSELEAVE = 0x2A3, TME_LEAVE = 2;
 
         readonly Timer timer = new Timer { Interval = 1000 };
         List<BatteryReading> items = new List<BatteryReading>();
         IntPtr taskbar;
         string painted = "";
         int paintedWidth;
+        bool hover;
+
+        /// <summary>Le coin haut droit du widget : le panneau s'ouvre juste au-dessus.</summary>
+        public Point PanelAnchor => Native.GetWindowRect(Handle, out Native.RECT r) ? new Point(r.Right, r.Top) : Cursor.Position;
 
         public event Action Clicked;
 
@@ -76,13 +81,13 @@ namespace Jus
                 return;
             }
 
-            string state = $"{barHeight}|{scale}|{light}|" + string.Join(";", items.Select(i => $"{i.Kind},{i.Text},{i.Charging}"));
+            string state = $"{barHeight}|{scale}|{light}|{hover}|" + string.Join(";", items.Select(i => $"{i.Kind},{i.Text},{i.Charging}"));
             if (state == painted)
             {
                 Place(paintedWidth, barHeight, scale);
                 return;
             }
-            using (Bitmap bmp = Paint(items, barHeight, scale, light))
+            using (Bitmap bmp = Paint(items, barHeight, scale, light, hover))
             {
                 Place(bmp.Width, barHeight, scale);
                 Present(bmp);
@@ -99,7 +104,7 @@ namespace Jus
         }
 
         /// <summary>Dessine les appareils sur fond transparent.</summary>
-        public static Bitmap Paint(IList<BatteryReading> list, int barHeight, float scale, bool light)
+        public static Bitmap Paint(IList<BatteryReading> list, int barHeight, float scale, bool light, bool hover = false)
         {
             using (Font font = new Font("Segoe UI", 12f * scale, FontStyle.Regular, GraphicsUnit.Pixel))
             {
@@ -107,7 +112,7 @@ namespace Jus
                 float[] textWidths;
                 using (var probe = new Bitmap(1, 1))
                 using (Graphics g = Graphics.FromImage(probe))
-                    textWidths = list.Select(i => i.PluggedIn ? 14 * scale : g.MeasureString(i.Text, font, PointF.Empty, StringFormat.GenericTypographic).Width + 1).ToArray();
+                    textWidths = list.Select(i => i.NoLevel ? 14 * scale : g.MeasureString(i.Text, font, PointF.Empty, StringFormat.GenericTypographic).Width + 1).ToArray();
 
                 float total = pad * 2 + itemGap * (list.Count - 1);
                 for (int i = 0; i < list.Count; i++)
@@ -119,6 +124,13 @@ namespace Jus
                     g.SmoothingMode = SmoothingMode.AntiAlias;
                     g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
                     g.Clear(Color.FromArgb(1, 0, 0, 0)); // presque transparent : la zone reste cliquable
+                    if (hover) // même survol que la flèche des icônes cachées
+                    {
+                        float inset = 4 * scale;
+                        using (GraphicsPath path = MenuTheme.Rounded(new RectangleF(0, inset, bmp.Width - 1, barHeight - inset * 2), 4 * scale))
+                        using (var brush = new SolidBrush(light ? Color.FromArgb(20, 0, 0, 0) : Color.FromArgb(30, 255, 255, 255)))
+                            g.FillPath(brush, path);
+                    }
 
                     Color normal = light ? Color.FromArgb(28, 28, 28) : Color.White;
                     Color low = light ? Color.FromArgb(196, 43, 28) : Color.FromArgb(255, 107, 96);
@@ -136,6 +148,8 @@ namespace Jus
                         }
                         if (item.PluggedIn)
                             Glyphs.Plug(g, x, (barHeight - 14 * scale) / 2, 14 * scale, c);
+                        else if (item.NoLevel)
+                            Glyphs.Wireless(g, x, (barHeight - 14 * scale) / 2, 14 * scale, c);
                         else
                             using (var brush = new SolidBrush(c))
                                 g.DrawString(item.Text, font, brush, x, (barHeight - font.GetHeight(g)) / 2, StringFormat.GenericTypographic);
@@ -195,6 +209,14 @@ namespace Jus
         protected override void WndProc(ref Message m)
         {
             if (m.Msg == WM_MOUSEACTIVATE) { m.Result = (IntPtr)MA_NOACTIVATE; return; }
+            if (m.Msg == WM_MOUSEMOVE && !hover)
+            {
+                hover = true;
+                var track = new Native.TRACKMOUSEEVENT { cbSize = System.Runtime.InteropServices.Marshal.SizeOf(typeof(Native.TRACKMOUSEEVENT)), dwFlags = TME_LEAVE, hwndTrack = Handle };
+                Native.TrackMouseEvent(ref track);
+                Render();
+            }
+            if (m.Msg == WM_MOUSELEAVE) { hover = false; Render(); }
             if (m.Msg == WM_LBUTTONUP || m.Msg == WM_RBUTTONUP) { Clicked?.Invoke(); return; }
             base.WndProc(ref m);
         }
@@ -261,6 +283,22 @@ namespace Jus
                         g.FillRectangle(fill, 3, 6.5f, 5, 3);
                         break;
                 }
+            }
+            g.Restore(saved);
+        }
+
+        /// <summary>Des ondes : l'appareil est relié sans fil, mais ne transmet pas son niveau.</summary>
+        public static void Wireless(Graphics g, float x, float y, float size, Color color)
+        {
+            GraphicsState saved = g.Save();
+            g.TranslateTransform(x, y);
+            g.ScaleTransform(size / 16f, size / 16f);
+            using (var pen = new Pen(color, 1.5f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            using (var dot = new SolidBrush(color))
+            {
+                foreach (float r in new[] { 4.5f, 8f, 11.5f })
+                    g.DrawArc(pen, 8 - r, 13 - r, r * 2, r * 2, 225, 90);
+                g.FillEllipse(dot, 6.8f, 11.8f, 2.4f, 2.4f);
             }
             g.Restore(saved);
         }

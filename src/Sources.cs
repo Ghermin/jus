@@ -23,7 +23,7 @@ namespace Jus
         public bool PluggedIn;
         public int Missed;
         public bool IsLow => !NoLevel && Percent <= 20 && !Charging;
-        public string Text => PluggedIn ? "branchée" : NoLevel ? "—" : (Approximate ? "~" : "") + Percent + "%";
+        public string Text => PluggedIn ? "branchée" : NoLevel ? "sans fil" : (Approximate ? "~" : "") + Percent + "%";
     }
 
     interface IBatterySource
@@ -141,10 +141,10 @@ namespace Jus
                 if (b.BatteryType == 0) continue; // déconnectée
                 if (b.BatteryType == 1) // filaire pour Windows : présente, mais sans niveau
                 {
-                    // Le récepteur 8BitDo (310A) se dit filaire lui aussi : seul le câble ajoute le périphérique 301C.
-                    bool receiver = hid.Any(h => h.Vid == 0x2DC8 && h.Pid == 0x310A);
-                    bool cable = hid.Any(h => h.Vid == 0x2DC8 && h.Pid == 0x301C);
-                    output.Add(new BatteryReading { Id = "xinput:" + user, Name = PadName(hid, user), Kind = DeviceKind.Gamepad, NoLevel = true, PluggedIn = !receiver || cable, Source = Name });
+                    // Une 8BitDo se dit filaire même en sans-fil : on lui demande comment elle est reliée.
+                    bool eightBitDo = hid.Any(h => h.Vid == 0x2DC8 && h.Pid == 0x310A);
+                    bool plugged = !eightBitDo || (EightBitDoCable(hid, log) ?? hid.Any(h => h.Vid == 0x2DC8 && h.Pid == 0x301C));
+                    output.Add(new BatteryReading { Id = "xinput:" + user, Name = PadName(hid, user), Kind = DeviceKind.Gamepad, NoLevel = true, PluggedIn = plugged, Source = Name });
                     continue;
                 }
                 int[] levels = { 10, 35, 65, 100 };
@@ -154,6 +154,50 @@ namespace Jus
                     Percent = levels[Math.Min((int)b.BatteryLevel, 3)], Approximate = true, Source = Name,
                 });
             }
+        }
+
+        /// <summary>
+        /// Requête d'identification 8BitDo, en lecture seule : la réponse porte 301B par le câble, 301C par le récepteur.
+        /// Ne rien ajouter ici sans source fiable : d'autres commandes de cette famille réécrivent la mémoire de la manette.
+        /// </summary>
+        bool? EightBitDoCable(List<HidInfo> hid, TextWriter log)
+        {
+            // On ne redemande que si les périphériques 8BitDo ont changé (câble ou récepteur branché, retiré).
+            string layout = string.Join(",", hid.Where(h => h.Vid == 0x2DC8).Select(h => h.Pid).OrderBy(p => p));
+            if (layout != cableLayout)
+            {
+                cableLayout = layout;
+                cable = AskEightBitDo(hid, log);
+            }
+            return cable;
+        }
+
+        string cableLayout;
+        bool? cable;
+
+        static bool? AskEightBitDo(List<HidInfo> hid, TextWriter log)
+        {
+            HidInfo info = hid.FirstOrDefault(h => h.Vid == 0x2DC8 && h.Pid == 0x310A && h.UsagePage == 0xFF7A && h.InputLen >= 64 && h.OutputLen >= 64);
+            if (info == null) return null;
+            using (HidDevice dev = HidDevice.Open(info))
+            {
+                if (dev == null) return null;
+                byte[] request = new byte[info.OutputLen];
+                request[0] = 0x81; request[1] = 0x05; request[3] = 0x21; request[4] = 0x01;
+                dev.Flush();
+                if (!dev.Write(request)) return null;
+                byte[] b = new byte[info.InputLen];
+                int end = Environment.TickCount + 500;
+                while (Environment.TickCount - end < 0)
+                {
+                    int n = dev.Read(b, Math.Max(1, end - Environment.TickCount));
+                    if (n < 8 || b[0] != 0x02 || b[1] != 0x22) continue;
+                    int product = b[6] | b[7] << 8;
+                    log?.WriteLine($"  8bitdo : identifiant {product:X4}");
+                    return product == 0x301B ? true : product == 0x301C ? false : (bool?)null;
+                }
+            }
+            return null;
         }
 
         /// <summary>Le vrai nom si une seule manette XInput est branchée : XInput ne dit pas laquelle est laquelle.</summary>
@@ -238,6 +282,8 @@ namespace Jus
 
         sealed class Slot { public string Name; public DeviceKind Kind; public byte Feature; public ushort FeatureId; }
         readonly Dictionary<string, Slot> slots = new Dictionary<string, Slot>();
+        readonly Dictionary<string, int> emptyUntil = new Dictionary<string, int>();
+        const int EmptySlotMs = 30000;
 
         public void Poll(List<BatteryReading> output, List<HidInfo> hid, TextWriter log)
         {
@@ -260,8 +306,13 @@ namespace Jus
             string key = info.Path + "#" + index;
             if (!slots.TryGetValue(key, out Slot slot))
             {
+                if (emptyUntil.TryGetValue(key, out int until) && Environment.TickCount - until < 0) return;
                 slot = Discover(dev, index);
-                if (slot == null) return;
+                if (slot == null)
+                {
+                    emptyUntil[key] = Environment.TickCount + EmptySlotMs; // un emplacement vide coûte une longue attente
+                    return;
+                }
                 slots[key] = slot;
             }
             if (!ReadBattery(dev, index, slot, out int percent, out bool charging, out bool approx))
