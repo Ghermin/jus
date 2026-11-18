@@ -25,7 +25,7 @@ namespace Jus
         readonly BatteryMonitor monitor = new BatteryMonitor();
         readonly TaskbarWidget widget = new TaskbarWidget();
         readonly NotifyIcon tray = new NotifyIcon();
-        readonly ContextMenuStrip menu = new PanelMenu();
+        readonly PanelMenu menu = new PanelMenu();
         readonly MenuTheme theme = new MenuTheme();
         readonly Settings settings = Settings.Load();
         readonly HashSet<string> alerted = new HashSet<string>();
@@ -89,6 +89,8 @@ namespace Jus
 
         void OpenMenu()
         {
+            if (menu.Visible) { menu.Close(); return; }
+            if (menu.JustDismissed) return;
             Native.SetForegroundWindow(ui.Handle);
             menu.Show(Cursor.Position, ToolStripDropDownDirection.AboveLeft);
         }

@@ -158,8 +158,69 @@ namespace Jus
     /// <summary>Panneau de largeur fixe, quelle que soit la longueur des noms d'appareils.</summary>
     sealed class PanelMenu : ContextMenuStrip
     {
+        const int VK_LBUTTON = 1, VK_RBUTTON = 2, VK_MBUTTON = 4, VK_ESCAPE = 0x1B, GraceMs = 300, ReopenMs = 600;
+
+        readonly Timer watch = new Timer { Interval = 40 };
+        readonly uint ownProcess = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+        bool wasDown;
+        IntPtr foreground;
+        int openedAt, dismissedAt = Environment.TickCount - ReopenMs;
+
+        public PanelMenu() { watch.Tick += (s, e) => Watch(); }
+
+        /// <summary>Le clic qui vient de fermer le panneau ne doit pas le rouvrir en arrivant sur le widget.</summary>
+        public bool JustDismissed => Environment.TickCount - dismissedAt < ReopenMs;
+
         public override Size GetPreferredSize(Size proposedSize)
             => new Size((int)(390 * DeviceDpi / 96f), base.GetPreferredSize(proposedSize).Height);
+
+        protected override void OnOpened(EventArgs e)
+        {
+            base.OnOpened(e);
+            wasDown = AnyButtonDown();
+            foreground = Native.GetForegroundWindow();
+            openedAt = Environment.TickCount;
+            watch.Start();
+        }
+
+        protected override void OnClosed(ToolStripDropDownClosedEventArgs e)
+        {
+            watch.Stop();
+            base.OnClosed(e);
+        }
+
+        /// <summary>
+        /// Ouvert depuis la barre des tâches, le panneau n'a pas le focus : Windows ne le ferme donc jamais tout seul.
+        /// On surveille nous-mêmes les clics à côté, la touche Échap et le changement de fenêtre active.
+        /// </summary>
+        void Watch()
+        {
+            bool down = AnyButtonDown();
+            bool pressed = down && !wasDown;
+            wasDown = down;
+            if ((pressed && !Bounds.Contains(Cursor.Position)) || IsDown(VK_ESCAPE)) { Dismiss(); return; }
+
+            IntPtr now = Native.GetForegroundWindow();
+            if (Environment.TickCount - openedAt < GraceMs) { foreground = now; return; } // le clic d'ouverture active encore la barre
+            if (now == foreground || now == IntPtr.Zero) return;
+            Native.GetWindowThreadProcessId(now, out uint process);
+            if (process != ownProcess) Dismiss();
+        }
+
+        void Dismiss()
+        {
+            dismissedAt = Environment.TickCount;
+            Close(ToolStripDropDownCloseReason.CloseCalled);
+        }
+
+        static bool IsDown(int key) => (Native.GetAsyncKeyState(key) & 0x8000) != 0;
+        static bool AnyButtonDown() => IsDown(VK_LBUTTON) || IsDown(VK_RBUTTON) || IsDown(VK_MBUTTON);
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) watch.Dispose();
+            base.Dispose(disposing);
+        }
     }
 
     /// <summary>En-tête du panneau : le nom de l'appli et le nombre d'appareils.</summary>

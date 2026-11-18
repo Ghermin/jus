@@ -116,6 +116,9 @@ namespace Jus
         [DllImport("user32")] public static extern uint GetDpiForWindow(IntPtr h);
         [DllImport("user32")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int w, int ht, uint flags);
         [DllImport("user32")] public static extern bool SetForegroundWindow(IntPtr h);
+        [DllImport("user32")] public static extern IntPtr GetForegroundWindow();
+        [DllImport("user32")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint process);
+        [DllImport("user32")] public static extern short GetAsyncKeyState(int key);
         [DllImport("user32", SetLastError = true)]
         public static extern bool UpdateLayeredWindow(IntPtr h, IntPtr dst, IntPtr ptDst, ref SIZE size, IntPtr src, ref POINT ptSrc, int key, ref BLENDFUNCTION blend, int flags);
         [DllImport("user32")] public static extern IntPtr GetDC(IntPtr h);
