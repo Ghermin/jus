@@ -84,7 +84,8 @@ namespace Jus
             }
         }
 
-        static string Shorten(string s) => s.Length <= 127 ? s : s.Substring(0, 126) + "…";
+        /// <summary>NotifyIcon.Text lève une exception à partir de 64 caractères.</summary>
+        static string Shorten(string s) => s.Length <= 63 ? s : s.Substring(0, 62) + "…";
 
         void OpenMenu()
         {

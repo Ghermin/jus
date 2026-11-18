@@ -13,8 +13,8 @@ using Microsoft.Win32;
 [assembly: AssemblyTitle("Jus")]
 [assembly: AssemblyProduct("Jus")]
 [assembly: AssemblyDescription("Le niveau de batterie de tous tes appareils dans la barre des tâches")]
-[assembly: AssemblyVersion("1.1.0.0")]
-[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyVersion("1.1.1.0")]
+[assembly: AssemblyFileVersion("1.1.1.0")]
 
 namespace Jus
 {
