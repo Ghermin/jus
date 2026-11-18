@@ -17,8 +17,13 @@ namespace Jus
         public DeviceKind Kind = DeviceKind.Other;
         public int Percent;
         public bool Charging, Approximate;
+        /// <summary>Appareil bien présent, mais qui ne donne pas son niveau à Windows.</summary>
+        public bool NoLevel;
+        /// <summary>Reliée par un câble : une prise remplace le pourcentage.</summary>
+        public bool PluggedIn;
         public int Missed;
-        public string Text => (Approximate ? "~" : "") + Percent + "%";
+        public bool IsLow => !NoLevel && Percent <= 20 && !Charging;
+        public string Text => PluggedIn ? "branchée" : NoLevel ? "—" : (Approximate ? "~" : "") + Percent + "%";
     }
 
     interface IBatterySource
@@ -133,15 +138,31 @@ namespace Jus
                 catch (DllNotFoundException) { return; }
                 catch (EntryPointNotFoundException) { return; }
                 log?.WriteLine($"  xinput {user} : type {b.BatteryType}, niveau {b.BatteryLevel}");
-                // 0 = déconnectée, 1 = filaire (pas de batterie à afficher)
-                if (b.BatteryType == 0 || b.BatteryType == 1) continue;
+                if (b.BatteryType == 0) continue; // déconnectée
+                if (b.BatteryType == 1) // filaire pour Windows : présente, mais sans niveau
+                {
+                    // Le récepteur 8BitDo (310A) se dit filaire lui aussi : seul le câble ajoute le périphérique 301C.
+                    bool receiver = hid.Any(h => h.Vid == 0x2DC8 && h.Pid == 0x310A);
+                    bool cable = hid.Any(h => h.Vid == 0x2DC8 && h.Pid == 0x301C);
+                    output.Add(new BatteryReading { Id = "xinput:" + user, Name = PadName(hid, user), Kind = DeviceKind.Gamepad, NoLevel = true, PluggedIn = !receiver || cable, Source = Name });
+                    continue;
+                }
                 int[] levels = { 10, 35, 65, 100 };
                 output.Add(new BatteryReading
                 {
-                    Id = "xinput:" + user, Name = user == 0 ? "Manette" : "Manette " + (user + 1), Kind = DeviceKind.Gamepad,
+                    Id = "xinput:" + user, Name = PadName(hid, user), Kind = DeviceKind.Gamepad,
                     Percent = levels[Math.Min((int)b.BatteryLevel, 3)], Approximate = true, Source = Name,
                 });
             }
+        }
+
+        /// <summary>Le vrai nom si une seule manette XInput est branchée : XInput ne dit pas laquelle est laquelle.</summary>
+        static string PadName(List<HidInfo> hid, int user)
+        {
+            List<HidInfo> pads = hid.Where(h => h.UsagePage == 1 && h.Usage == 5 && h.Path.IndexOf("ig_", StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+            if (pads.Count == 1 && pads[0].Product.Length > 0)
+                return Regex.Replace(pads[0].Product, @"^Controller \((.*)\)$", "$1").Replace(" Wireless Controller", "");
+            return user == 0 ? "Manette" : "Manette " + (user + 1);
         }
     }
 

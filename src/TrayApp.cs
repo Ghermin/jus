@@ -9,20 +9,29 @@ using System.Windows.Forms;
 
 namespace Jus
 {
-    /// <summary>L'appli : icône près de l'horloge, menu, alertes et réglages.</summary>
+    /// <summary>Ce que déclenchent les entrées du panneau.</summary>
+    sealed class PanelActions
+    {
+        public Action<BatteryReading> ToggleDevice = r => { };
+        public Action Refresh = () => { }, ToggleAlerts = () => { }, ToggleAutoStart = () => { }, Quit = () => { };
+    }
+
+    /// <summary>L'appli : icône près de l'horloge, panneau, alertes et réglages.</summary>
     sealed class TrayApp : ApplicationContext
     {
-        const int AlertBelow = 20;
+        public const int AlertBelow = 20;
 
         readonly Control ui = new Control();
         readonly BatteryMonitor monitor = new BatteryMonitor();
         readonly TaskbarWidget widget = new TaskbarWidget();
         readonly NotifyIcon tray = new NotifyIcon();
-        readonly ContextMenuStrip menu = new ContextMenuStrip { ShowCheckMargin = true, ShowImageMargin = false };
+        readonly ContextMenuStrip menu = new PanelMenu();
+        readonly MenuTheme theme = new MenuTheme();
         readonly Settings settings = Settings.Load();
         readonly HashSet<string> alerted = new HashSet<string>();
         readonly EventWaitHandle quit;
         readonly RegisteredWaitHandle quitWait;
+        readonly PanelActions actions;
         List<BatteryReading> readings = new List<BatteryReading>();
 
         public TrayApp(EventWaitHandle quitSignal)
@@ -31,13 +40,27 @@ namespace Jus
             ui.CreateControl();
             _ = ui.Handle;
 
+            actions = new PanelActions
+            {
+                ToggleDevice = ToggleDevice,
+                Refresh = monitor.Refresh,
+                ToggleAlerts = () => { settings.Alerts = !settings.Alerts; settings.Save(); },
+                ToggleAutoStart = () => Installer.AutoStart = !Installer.AutoStart,
+                Quit = Quit,
+            };
+
+            theme.Attach(menu);
+            menu.Opening += (s, e) =>
+            {
+                Fill(menu, theme, readings, settings.Hidden, settings.Alerts, Installer.AutoStart, actions);
+                e.Cancel = false;
+            };
+
             tray.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             tray.Text = "Jus";
             tray.ContextMenuStrip = menu;
             tray.Visible = true;
             tray.MouseUp += (s, e) => { if (e.Button == MouseButtons.Left) OpenMenu(); };
-
-            menu.Opening += (s, e) => { BuildMenu(); e.Cancel = false; };
             widget.Clicked += OpenMenu;
 
             monitor.Updated += list => ui.BeginInvoke((Action)(() => Apply(list)));
@@ -54,6 +77,7 @@ namespace Jus
 
             foreach (BatteryReading r in list)
             {
+                if (r.NoLevel) continue;
                 if (r.Charging || r.Percent > AlertBelow + 5) alerted.Remove(r.Id);
                 else if (settings.Alerts && r.Percent <= AlertBelow && alerted.Add(r.Id))
                     tray.ShowBalloonTip(8000, "Batterie faible", r.Name + " : plus que " + r.Text, ToolTipIcon.Warning);
@@ -64,41 +88,35 @@ namespace Jus
 
         void OpenMenu()
         {
-            BuildMenu();
             Native.SetForegroundWindow(ui.Handle);
             menu.Show(Cursor.Position, ToolStripDropDownDirection.AboveLeft);
         }
 
-        void BuildMenu()
+        /// <summary>Remplit le panneau. Séparé de l'appli pour que --preview-menu dessine exactement le même.</summary>
+        public static void Fill(ContextMenuStrip menu, MenuTheme theme, IList<BatteryReading> list, ICollection<string> hidden, bool alerts, bool autoStart, PanelActions actions)
         {
             menu.Items.Clear();
-            menu.Renderer = new MenuTheme(TaskbarWidget.LightTaskbar());
-
-            menu.Items.Add(new ToolStripLabel("Jus") { Font = new Font(menu.Font, FontStyle.Bold) });
+            string count = list.Count == 0 ? "aucun appareil" : list.Count == 1 ? "1 appareil" : list.Count + " appareils";
+            menu.Items.Add(new HeaderRow(theme, count));
             menu.Items.Add(new ToolStripSeparator());
 
-            if (readings.Count == 0)
-                menu.Items.Add(new ToolStripMenuItem("Aucun appareil détecté") { Enabled = false });
-            foreach (BatteryReading r in readings)
+            if (list.Count == 0)
+                menu.Items.Add(new ToolStripMenuItem("Allume un appareil sans fil pour le voir ici") { Enabled = false });
+            foreach (BatteryReading r in list)
             {
                 BatteryReading item = r;
-                string state = r.Text + (r.Charging ? " (en charge)" : "");
-                var entry = new ToolStripMenuItem(r.Name + "  ·  " + state)
-                {
-                    Checked = !settings.Hidden.Contains(r.Id), ToolTipText = "Afficher dans la barre des tâches",
-                };
-                entry.Click += (s, e) => ToggleDevice(item);
-                menu.Items.Add(entry);
+                menu.Items.Add(new DeviceRow(item, theme, !hidden.Contains(item.Id), () => actions.ToggleDevice(item)));
             }
 
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add(Entry("Actualiser", monitor.Refresh));
-            menu.Items.Add(Toggle($"Prévenir sous {AlertBelow} %", settings.Alerts, () => { settings.Alerts = !settings.Alerts; settings.Save(); }));
-            menu.Items.Add(Toggle("Lancer avec Windows", Installer.AutoStart, () => Installer.AutoStart = !Installer.AutoStart));
-            menu.Items.Add(Entry("Quitter", Quit));
+            menu.Items.Add(Entry("Actualiser", actions.Refresh));
+            menu.Items.Add(Toggle($"Prévenir sous {AlertBelow} %", alerts, actions.ToggleAlerts));
+            menu.Items.Add(Toggle("Lancer avec Windows", autoStart, actions.ToggleAutoStart));
+            menu.Items.Add(Entry("Quitter", actions.Quit));
             menu.Items.Add(new ToolStripSeparator());
-            var sig = Entry("un projet du bored dev playground", () => Process.Start(new ProcessStartInfo("https://ghermin.github.io/") { UseShellExecute = true }));
-            sig.Font = new Font("Consolas", menu.Font.SizeInPoints - 1);
+            ToolStripMenuItem sig = Entry("un projet du bored dev playground", () => Process.Start(new ProcessStartInfo("https://ghermin.github.io/") { UseShellExecute = true }));
+            sig.Font = MenuTheme.MonoFont;
+            sig.Tag = "sig";
             menu.Items.Add(sig);
         }
 
@@ -166,44 +184,6 @@ namespace Jus
             }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
-        }
-    }
-
-    /// <summary>Le menu suit le thème de la barre des tâches.</summary>
-    sealed class MenuTheme : ToolStripProfessionalRenderer
-    {
-        readonly Color back, hover, text, line;
-
-        public MenuTheme(bool light)
-        {
-            back = light ? Color.FromArgb(249, 249, 249) : Color.FromArgb(32, 32, 32);
-            hover = light ? Color.FromArgb(232, 232, 232) : Color.FromArgb(56, 56, 56);
-            text = light ? Color.FromArgb(28, 28, 28) : Color.FromArgb(242, 242, 242);
-            line = light ? Color.FromArgb(222, 222, 222) : Color.FromArgb(64, 64, 64);
-            RoundedEdges = false;
-        }
-
-        protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e) => e.Graphics.Clear(back);
-        protected override void OnRenderImageMargin(ToolStripRenderEventArgs e) { using (var b = new SolidBrush(back)) e.Graphics.FillRectangle(b, e.AffectedBounds); }
-        protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e) { using (var p = new Pen(line)) e.Graphics.DrawRectangle(p, 0, 0, e.ToolStrip.Width - 1, e.ToolStrip.Height - 1); }
-        protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e) { e.TextColor = e.Item.Enabled ? text : Color.FromArgb(140, text); base.OnRenderItemText(e); }
-        protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e)
-        {
-            using (var p = new Pen(text, 1.6f))
-            {
-                Rectangle r = e.ImageRectangle;
-                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                e.Graphics.DrawLines(p, new[] { new Point(r.Left + 3, r.Top + r.Height / 2), new Point(r.Left + r.Width / 2 - 1, r.Bottom - 4), new Point(r.Right - 3, r.Top + 4) });
-            }
-        }
-        protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
-        {
-            using (var p = new Pen(line)) e.Graphics.DrawLine(p, 8, e.Item.Height / 2, e.Item.Width - 8, e.Item.Height / 2);
-        }
-        protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
-        {
-            using (var b = new SolidBrush(e.Item.Selected && e.Item.Enabled ? hover : back))
-                e.Graphics.FillRectangle(b, new Rectangle(Point.Empty, e.Item.Size));
         }
     }
 }

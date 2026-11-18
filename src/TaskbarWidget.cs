@@ -107,7 +107,7 @@ namespace Jus
                 float[] textWidths;
                 using (var probe = new Bitmap(1, 1))
                 using (Graphics g = Graphics.FromImage(probe))
-                    textWidths = list.Select(i => g.MeasureString(i.Text, font, PointF.Empty, StringFormat.GenericTypographic).Width + 1).ToArray();
+                    textWidths = list.Select(i => i.PluggedIn ? 14 * scale : g.MeasureString(i.Text, font, PointF.Empty, StringFormat.GenericTypographic).Width + 1).ToArray();
 
                 float total = pad * 2 + itemGap * (list.Count - 1);
                 for (int i = 0; i < list.Count; i++)
@@ -126,7 +126,7 @@ namespace Jus
                     for (int i = 0; i < list.Count; i++)
                     {
                         BatteryReading item = list[i];
-                        Color c = item.Percent <= 20 && !item.Charging ? low : normal;
+                        Color c = item.IsLow ? low : normal;
                         Glyphs.Draw(g, item.Kind, x, (barHeight - iconSize) / 2, iconSize, c);
                         x += iconSize + gap;
                         if (item.Charging)
@@ -134,8 +134,11 @@ namespace Jus
                             Glyphs.Bolt(g, x, barHeight / 2f, bolt, c);
                             x += bolt;
                         }
-                        using (var brush = new SolidBrush(c))
-                            g.DrawString(item.Text, font, brush, x, (barHeight - font.GetHeight(g)) / 2, StringFormat.GenericTypographic);
+                        if (item.PluggedIn)
+                            Glyphs.Plug(g, x, (barHeight - 14 * scale) / 2, 14 * scale, c);
+                        else
+                            using (var brush = new SolidBrush(c))
+                                g.DrawString(item.Text, font, brush, x, (barHeight - font.GetHeight(g)) / 2, StringFormat.GenericTypographic);
                         x += textWidths[i] + itemGap;
                     }
                 }
@@ -258,6 +261,27 @@ namespace Jus
                         g.FillRectangle(fill, 3, 6.5f, 5, 3);
                         break;
                 }
+            }
+            g.Restore(saved);
+        }
+
+        /// <summary>Une prise : l'appareil est relié par un câble.</summary>
+        public static void Plug(Graphics g, float x, float y, float size, Color color)
+        {
+            GraphicsState saved = g.Save();
+            g.TranslateTransform(x, y);
+            g.ScaleTransform(size / 16f, size / 16f);
+            using (var pen = new Pen(color, 1.5f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+            using (var body = new GraphicsPath())
+            {
+                g.DrawLine(pen, 5.5f, 1.5f, 5.5f, 5);
+                g.DrawLine(pen, 10.5f, 1.5f, 10.5f, 5);
+                body.AddLine(3.5f, 5, 12.5f, 5);
+                body.AddLine(12.5f, 5, 12.5f, 7.5f);
+                body.AddArc(3.5f, 3, 9, 9, 0, 180);
+                body.CloseFigure();
+                g.DrawPath(pen, body);
+                g.DrawLine(pen, 8, 12, 8, 14.5f);
             }
             g.Restore(saved);
         }

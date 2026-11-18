@@ -14,11 +14,13 @@ Appli Windows qui affiche le niveau de batterie des appareils dans la barre des 
 - `src/Sources.cs` : une classe par famille d'appareils (`IBatterySource`). Ajouter un appareil = une source de plus, déclarée dans `BatteryMonitor.sources`.
 - `src/BatteryMonitor.cs` : interroge les sources toutes les minutes sur un fil à part. Une fenêtre enfant de la barre des tâches partage sa file d'entrée avec l'Explorateur : aucun accès matériel sur le fil de l'interface, sinon la barre des tâches se fige.
 - `src/TaskbarWidget.cs` : fenêtre transparente enfant de `Shell_TrayWnd`, placée à gauche de `TrayNotifyWnd`.
-- `src/TrayApp.cs` : icône, menu, alertes, réglages (`%APPDATA%\Jus\settings.txt`).
+- `src/TrayApp.cs` : icône, panneau, alertes, réglages (`%APPDATA%\Jus\settings.txt`).
+- `src/MenuTheme.cs` : design du panneau, repris du Gestionnaire RGB. Couleurs `Palette.Light` / `Palette.Dark` = variables `--pg-*` de `docs/index.html` : les changer aux deux endroits. `--preview-menu fichier.png` le dessine en clair et en sombre.
 
 ## Protocoles
 
-- Requêtes en lecture seule uniquement : ne jamais envoyer de commande qui modifie un réglage d'un appareil.
+- Requêtes en lecture seule uniquement : ne jamais envoyer de commande qui modifie un réglage d'un appareil, ni de commande non documentée pour « voir ce que ça répond ».
+- 8BitDo Ultimate 2C : pas de niveau connu (XInput la dit filaire même en sans-fil, SDL ne lit pas sa batterie). Elle s'affiche avec `NoLevel`. Le récepteur est `2DC8:310A` ; le câble branché ajoute `2DC8:301C`, d'où `PluggedIn`.
 - Logitech HID++ : `softwareId` change à chaque requête, sinon une réponse en retard d'une souris en veille passe pour la suivante.
 - Arctis Nova 7 : requête `00 B0`, réponse niveau en `b[3]`, état en `b[4]` (0 éteint, 1 en charge).
 - Les noms Bluetooth peuvent contenir le prénom du propriétaire : `Naming.Clean` le retire.
