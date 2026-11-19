@@ -13,8 +13,8 @@ using Microsoft.Win32;
 [assembly: AssemblyTitle("Jus")]
 [assembly: AssemblyProduct("Jus")]
 [assembly: AssemblyDescription("Le niveau de batterie de tous tes appareils dans la barre des tâches")]
-[assembly: AssemblyVersion("1.3.0.0")]
-[assembly: AssemblyFileVersion("1.3.0.0")]
+[assembly: AssemblyVersion("1.4.0.0")]
+[assembly: AssemblyFileVersion("1.4.0.0")]
 
 namespace Jus
 {
@@ -73,7 +73,7 @@ namespace Jus
                 log.WriteLine();
                 log.WriteLine("=== Collections HID ===");
                 foreach (HidInfo h in Hid.Enumerate().OrderBy(h => h.Vid).ThenBy(h => h.Pid))
-                    log.WriteLine($"{h.Vid:X4}:{h.Pid:X4} page {h.UsagePage:X4}/{h.Usage:X4} in {h.InputLen} out {h.OutputLen} feat {h.FeatureLen} bt={h.IsBluetooth} {h.Product}");
+                    log.WriteLine($"{h.Vid:X4}:{h.Pid:X4} page {h.UsagePage:X4}/{h.Usage:X4} in {h.InputLen} out {h.OutputLen} feat {h.FeatureLen} bt={h.IsBluetooth}{(h.IsVirtual ? " virtuelle" : "")} {h.Product}");
             }
             return 0;
         }

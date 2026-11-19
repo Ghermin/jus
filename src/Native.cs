@@ -93,6 +93,12 @@ namespace Jus
         public static extern bool SetupDiGetDeviceProperty(IntPtr set, ref SP_DEVINFO_DATA info, ref DEVPROPKEY key, out uint type, byte[] buffer, int size, out int required, int flags);
         [DllImport("setupapi")] public static extern bool SetupDiDestroyDeviceInfoList(IntPtr set);
 
+        // ---------------------------------------------------------------- arbre des périphériques
+        public const int CM_DRP_HARDWAREID = 2, CR_SUCCESS = 0;
+        [DllImport("cfgmgr32")] public static extern int CM_Get_Parent(out uint parent, uint devInst, int flags);
+        [DllImport("cfgmgr32", EntryPoint = "CM_Get_DevNode_Registry_PropertyW")]
+        public static extern int CM_Get_DevNode_Registry_Property(uint devInst, int property, out int type, byte[] buffer, ref int length, int flags);
+
         // ---------------------------------------------------------------- Bluetooth classique
         [StructLayout(LayoutKind.Sequential)]
         public struct BLUETOOTH_DEVICE_SEARCH_PARAMS

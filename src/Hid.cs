@@ -13,6 +13,8 @@ namespace Jus
         public string Path, Product;
         public ushort Vid, Pid, UsagePage, Usage;
         public int InputLen, OutputLen, FeatureLen;
+        /// <summary>Manette virtuelle (ViGEm, utilisé par DS4Windows) : copie d'une vraie manette, déjà comptée.</summary>
+        public bool IsVirtual;
         public bool IsBluetooth => Path.IndexOf("{00001124-", StringComparison.OrdinalIgnoreCase) >= 0
                                 || Path.IndexOf("bth", StringComparison.OrdinalIgnoreCase) >= 0;
     }
@@ -30,28 +32,52 @@ namespace Jus
                 var data = new Native.SP_DEVICE_INTERFACE_DATA { cbSize = Marshal.SizeOf(typeof(Native.SP_DEVICE_INTERFACE_DATA)) };
                 for (int i = 0; Native.SetupDiEnumDeviceInterfaces(set, IntPtr.Zero, ref guid, i, ref data); i++)
                 {
-                    string path = InterfacePath(set, ref data);
+                    var dev = new Native.SP_DEVINFO_DATA { cbSize = Marshal.SizeOf(typeof(Native.SP_DEVINFO_DATA)) };
+                    string path = InterfacePath(set, ref data, ref dev);
                     if (path == null) continue;
                     HidInfo info = Describe(path);
-                    if (info != null) result.Add(info);
+                    if (info == null) continue;
+                    if (info.UsagePage == 1 && (info.Usage == 4 || info.Usage == 5)) info.IsVirtual = OnVirtualBus(dev.DevInst);
+                    result.Add(info);
                 }
             }
             finally { Native.SetupDiDestroyDeviceInfoList(set); }
             return result;
         }
 
-        static string InterfacePath(IntPtr set, ref Native.SP_DEVICE_INTERFACE_DATA data)
+        static string InterfacePath(IntPtr set, ref Native.SP_DEVICE_INTERFACE_DATA data, ref Native.SP_DEVINFO_DATA dev)
         {
             Native.SetupDiGetDeviceInterfaceDetail(set, ref data, IntPtr.Zero, 0, out int size, IntPtr.Zero);
             if (size <= 0) return null;
             IntPtr mem = Marshal.AllocHGlobal(size);
+            IntPtr devMem = Marshal.AllocHGlobal(dev.cbSize);
             try
             {
                 Marshal.WriteInt32(mem, IntPtr.Size == 8 ? 8 : 6);
-                if (!Native.SetupDiGetDeviceInterfaceDetail(set, ref data, mem, size, out _, IntPtr.Zero)) return null;
+                Marshal.StructureToPtr(dev, devMem, false);
+                if (!Native.SetupDiGetDeviceInterfaceDetail(set, ref data, mem, size, out _, devMem)) return null;
+                dev = (Native.SP_DEVINFO_DATA)Marshal.PtrToStructure(devMem, typeof(Native.SP_DEVINFO_DATA));
                 return Marshal.PtrToStringUni(mem + 4);
             }
-            finally { Marshal.FreeHGlobal(mem); }
+            finally { Marshal.FreeHGlobal(mem); Marshal.FreeHGlobal(devMem); }
+        }
+
+        /// <summary>Vrai si l'appareil descend du bus virtuel ViGEm (manettes Xbox 360 / DS4 créées par DS4Windows et d'autres).</summary>
+        static bool OnVirtualBus(uint devInst)
+        {
+            var buffer = new byte[1024];
+            for (int depth = 0; depth < 8 && devInst != 0; depth++)
+            {
+                int length = buffer.Length;
+                if (Native.CM_Get_DevNode_Registry_Property(devInst, Native.CM_DRP_HARDWAREID, out _, buffer, ref length, 0) == Native.CR_SUCCESS)
+                {
+                    string ids = Encoding.Unicode.GetString(buffer, 0, Math.Max(0, length));
+                    if (ids.IndexOf("ViGEmBus", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                }
+                if (Native.CM_Get_Parent(out uint parent, devInst, 0) != Native.CR_SUCCESS) break;
+                devInst = parent;
+            }
+            return false;
         }
 
         static HidInfo Describe(string path)

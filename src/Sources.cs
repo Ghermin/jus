@@ -163,20 +163,38 @@ namespace Jus
 
         public void Poll(List<BatteryReading> output, List<HidInfo> hid, TextWriter log)
         {
+            // DS4Windows (et d'autres) recopient une manette PlayStation en manette Xbox virtuelle, vue aussi par XInput.
+            // Ces copies se disent filaires et XInput ne dit pas quel numéro est virtuel : on retire autant
+            // de manettes « filaires » que de copies, en partant des derniers numéros (les copies arrivent après les vraies).
+            int copies = hid.Count(h => h.IsVirtual && IsXInputPad(h));
+            var wired = new List<int>();
+            var info = new Native.XINPUT_BATTERY_INFORMATION[4];
             for (int user = 0; user < 4; user++)
             {
-                Native.XINPUT_BATTERY_INFORMATION b;
-                try { if (Native.XInputGetBatteryInformation(user, 0, out b) != 0) continue; }
+                try { if (Native.XInputGetBatteryInformation(user, 0, out info[user]) != 0) continue; }
                 catch (DllNotFoundException) { return; }
                 catch (EntryPointNotFoundException) { return; }
-                log?.WriteLine($"  xinput {user} : type {b.BatteryType}, niveau {b.BatteryLevel}");
-                if (b.BatteryType == 0) continue; // déconnectée
+                log?.WriteLine($"  xinput {user} : type {info[user].BatteryType}, niveau {info[user].BatteryLevel}");
+                if (info[user].BatteryType == 1) wired.Add(user);
+            }
+            if (copies > 0) log?.WriteLine($"  manettes virtuelles ignorées : {copies}");
+            var skipped = new HashSet<int>(wired.Skip(Math.Max(0, wired.Count - copies)));
+
+            for (int user = 0; user < 4; user++)
+            {
+                Native.XINPUT_BATTERY_INFORMATION b = info[user];
+                if (b.BatteryType == 0 || skipped.Contains(user)) continue; // déconnectée, ou copie virtuelle
                 if (b.BatteryType == 1) // filaire pour Windows : présente, mais sans niveau
                 {
                     // Une 8BitDo se dit filaire même en sans-fil : on lui demande comment elle est reliée.
                     bool eightBitDo = hid.Any(h => h.Vid == 0x2DC8 && h.Pid == 0x310A);
                     bool plugged = !eightBitDo || (EightBitDoCable(hid, log) ?? hid.Any(h => h.Vid == 0x2DC8 && h.Pid == 0x301C));
-                    output.Add(new BatteryReading { Id = "xinput:" + user, Name = PadName(hid, user), Kind = DeviceKind.Gamepad, NoLevel = true, PluggedIn = plugged, Source = Name });
+                    int? level = eightBitDo && !plugged ? EightBitDoLevel(hid, log) : null;
+                    output.Add(new BatteryReading
+                    {
+                        Id = "xinput:" + user, Name = PadName(hid, user), Kind = DeviceKind.Gamepad, Source = Name,
+                        NoLevel = level == null, Percent = level ?? 0, PluggedIn = plugged,
+                    });
                     continue;
                 }
                 int[] levels = { 10, 35, 65, 100 };
@@ -199,15 +217,37 @@ namespace Jus
             if (layout != cableLayout)
             {
                 cableLayout = layout;
-                cable = AskEightBitDo(hid, log);
+                Remember(AskEightBitDo(hid, log));
             }
             return cable;
         }
 
+        /// <summary>
+        /// Niveau envoyé par une manette et un dongle aux firmwares modifiés (voir CLAUDE.md) : la réponse d'identification
+        /// du dongle porte alors le pourcentage en octet 8 et la signature 0xBA en octet 9. Sans eux, null.
+        /// </summary>
+        int? EightBitDoLevel(List<HidInfo> hid, TextWriter log)
+        {
+            if (Environment.TickCount - levelAsked > LevelEveryMs || log != null) Remember(AskEightBitDo(hid, log));
+            return level;
+        }
+
+        const int LevelEveryMs = 20000;   // la batterie change lentement, et la réponse vient de la RAM du dongle
         string cableLayout;
         bool? cable;
+        int? level;
+        int levelAsked = Environment.TickCount - LevelEveryMs - 1;
 
-        static bool? AskEightBitDo(List<HidInfo> hid, TextWriter log)
+        void Remember(byte[] reply)
+        {
+            levelAsked = Environment.TickCount;
+            if (reply == null) { cable = null; level = null; return; }
+            int product = reply[6] | reply[7] << 8;
+            cable = product == 0x301B ? true : product == 0x301C ? false : (bool?)null;
+            level = product == 0x301C && reply.Length > 9 && reply[9] == 0xBA && reply[8] <= 100 ? reply[8] : (int?)null;
+        }
+
+        static byte[] AskEightBitDo(List<HidInfo> hid, TextWriter log)
         {
             HidInfo info = hid.FirstOrDefault(h => h.Vid == 0x2DC8 && h.Pid == 0x310A && h.UsagePage == 0xFF7A && h.InputLen >= 64 && h.OutputLen >= 64);
             if (info == null) return null;
@@ -223,19 +263,20 @@ namespace Jus
                 while (Environment.TickCount - end < 0)
                 {
                     int n = dev.Read(b, Math.Max(1, end - Environment.TickCount));
-                    if (n < 8 || b[0] != 0x02 || b[1] != 0x22) continue;
-                    int product = b[6] | b[7] << 8;
-                    log?.WriteLine($"  8bitdo : identifiant {product:X4}");
-                    return product == 0x301B ? true : product == 0x301C ? false : (bool?)null;
+                    if (n < 10 || b[0] != 0x02 || b[1] != 0x22) continue;
+                    log?.WriteLine($"  8bitdo : identifiant {b[6] | b[7] << 8:X4}" + (b[9] == 0xBA ? $", batterie {b[8]} %" : ""));
+                    return (byte[])b.Clone();
                 }
             }
             return null;
         }
 
+        static bool IsXInputPad(HidInfo h) => h.UsagePage == 1 && h.Usage == 5 && h.Path.IndexOf("ig_", StringComparison.OrdinalIgnoreCase) >= 0;
+
         /// <summary>Le vrai nom si une seule manette XInput est branchée : XInput ne dit pas laquelle est laquelle.</summary>
         static string PadName(List<HidInfo> hid, int user)
         {
-            List<HidInfo> pads = hid.Where(h => h.UsagePage == 1 && h.Usage == 5 && h.Path.IndexOf("ig_", StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+            List<HidInfo> pads = hid.Where(h => !h.IsVirtual && IsXInputPad(h)).ToList();
             if (pads.Count == 1 && pads[0].Product.Length > 0)
                 return Regex.Replace(pads[0].Product, @"^Controller \((.*)\)$", "$1").Replace(" Wireless Controller", "");
             return user == 0 ? "Manette" : "Manette " + (user + 1);
