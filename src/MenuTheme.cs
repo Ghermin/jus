@@ -56,7 +56,7 @@ namespace Jus
             menu.Renderer = this;
             menu.Font = TextFont;
             menu.ShowImageMargin = false;
-            menu.ShowCheckMargin = true;
+            menu.ShowCheckMargin = false; // les lignes dessinent leurs coches elles-mêmes
             menu.DropShadowEnabled = true;
             menu.Padding = new Padding(4, 6, 4, 6);
             menu.ShowItemToolTips = true;
@@ -223,13 +223,13 @@ namespace Jus
         }
     }
 
-    /// <summary>Colonnes du panneau à 96 ppp, mesurées sur les entrées WinForms (« Actualiser », « Prévenir… »).</summary>
+    /// <summary>Colonnes du panneau à 96 ppp, communes à toutes les lignes (toutes dessinées à la main).</summary>
     static class Columns
     {
-        public const float Edge = 2;    // bord gauche des lignes dessinées à la main (comme les séparateurs)
-        public const float Check = 27;  // centre des coches
-        public const float Text = 37;   // début du texte
-        public const float Width = 386; // largeur des lignes dessinées à la main
+        public const float Edge = 2;    // bord gauche des lignes (comme les séparateurs)
+        public const float Check = 20;  // centre des coches
+        public const float Text = 34;   // début du texte, de l'icône des appareils et du titre
+        public const float Width = 386; // largeur des lignes
     }
 
     /// <summary>Ligne dessinée à la main, posée au bord du panneau (voir PanelMenu.OnLayout).</summary>
@@ -254,10 +254,65 @@ namespace Jus
 
         protected override void OnPaint(PaintEventArgs e)
         {
+            const TextFormatFlags flat = TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding;
             int left = (int)At(Columns.Text);
             var box = new Rectangle(left, 0, Width - left - (int)(12 * S), Height);
-            TextRenderer.DrawText(e.Graphics, "Jus", MenuTheme.TitleFont, box, theme.P.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            TextRenderer.DrawText(e.Graphics, "Jus", MenuTheme.TitleFont, box, theme.P.Text, flat);
+            // La version à côté du nom : on voit tout de suite si la mise à jour est passée.
+            int name = TextRenderer.MeasureText(e.Graphics, "Jus", MenuTheme.TitleFont, Size.Empty, TextFormatFlags.NoPadding).Width;
+            TextRenderer.DrawText(e.Graphics, Version, MenuTheme.TextFont, new Rectangle(left + name + (int)(6 * S), 0, box.Width, Height), theme.P.Muted, flat);
             TextRenderer.DrawText(e.Graphics, right, MenuTheme.TextFont, box, theme.P.Muted, TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+        }
+
+        static readonly string Version = typeof(HeaderRow).Assembly.GetName().Version.ToString(3);
+    }
+
+    /// <summary>Une entrée du bas : texte, coche éventuelle (réglage), même survol que les appareils.</summary>
+    sealed class ActionRow : CustomRow
+    {
+        readonly MenuTheme theme;
+        readonly string text;
+        readonly Action run;
+        readonly bool toggle, signature;
+        bool on, hover;
+
+        public ActionRow(MenuTheme theme, string text, Action run, bool? check = null, bool signature = false)
+        {
+            this.theme = theme;
+            this.text = text;
+            this.run = run;
+            this.signature = signature;
+            toggle = check != null;
+            on = check == true;
+            Enabled = run != null;
+            AccessibleName = text;
+            AccessibleRole = toggle ? AccessibleRole.CheckButton : AccessibleRole.MenuItem;
+        }
+
+        public override bool CanSelect => Enabled;
+        protected override bool DismissWhenClicked => !toggle; // une coche change sur place, le panneau reste ouvert
+        public override Size GetPreferredSize(Size constrainingSize) => new Size((int)(Columns.Width * S), (int)((signature ? 26 : 30) * S));
+
+        protected override void OnMouseEnter(EventArgs e) { hover = Enabled; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
+
+        protected override void OnClick(EventArgs e)
+        {
+            if (!Enabled) return;
+            if (toggle) { on = !on; Invalidate(); }
+            run();
+            base.OnClick(e);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Palette p = theme.P;
+            if (hover) MenuTheme.FillHover(e.Graphics, p, Width, Height, S);
+            if (on) MenuTheme.Check(e.Graphics, p.Text, At(Columns.Check), Height / 2f, S);
+            Color color = !Enabled || (signature && !hover) ? p.Muted : p.Text;
+            int left = (int)At(Columns.Text);
+            TextRenderer.DrawText(e.Graphics, text, signature ? MenuTheme.MonoFont : MenuTheme.TextFont, new Rectangle(left, 0, Width - left - (int)(12 * S), Height), color,
+                                  TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
         }
     }
 

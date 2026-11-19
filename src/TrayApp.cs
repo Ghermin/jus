@@ -143,7 +143,7 @@ namespace Jus
             menu.Items.Add(new ToolStripSeparator());
 
             if (list.Count == 0)
-                menu.Items.Add(new ToolStripMenuItem("Allume un appareil sans fil pour le voir ici") { Enabled = false });
+                menu.Items.Add(new ActionRow(theme, "Allume un appareil sans fil pour le voir ici", null));
             foreach (BatteryReading r in list)
             {
                 BatteryReading item = r;
@@ -151,22 +151,20 @@ namespace Jus
             }
 
             if (list.Any(r => r.Patchable))
-                menu.Items.Add(Entry("Afficher la batterie de la 8BitDo…", actions.EightBitDo));
+                menu.Items.Add(new ActionRow(theme, "Afficher la batterie de la 8BitDo…", actions.EightBitDo));
 
+            // Toutes les lignes sont dessinées à la main, sur les mêmes colonnes (MenuTheme.Columns) : tout est aligné.
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add(Entry("Actualiser", actions.Refresh));
-            menu.Items.Add(Toggle($"Prévenir sous {AlertBelow} %", alerts, actions.ToggleAlerts));
-            menu.Items.Add(Toggle("Lancer avec Windows", autoStart, actions.ToggleAutoStart));
-            menu.Items.Add(Entry("Quitter", actions.Quit));
+            menu.Items.Add(new ActionRow(theme, "Actualiser", actions.Refresh));
+            menu.Items.Add(new ActionRow(theme, $"Prévenir sous {AlertBelow} %", actions.ToggleAlerts, alerts));
+            menu.Items.Add(new ActionRow(theme, "Lancer avec Windows", actions.ToggleAutoStart, autoStart));
+            menu.Items.Add(new ActionRow(theme, "Quitter", actions.Quit));
             menu.Items.Add(new ToolStripSeparator());
-            ToolStripMenuItem sig = Entry("un projet du bored dev playground", () =>
+            menu.Items.Add(new ActionRow(theme, "un projet du bored dev playground", () =>
             {
                 menu.Close();
                 Process.Start(new ProcessStartInfo("https://ghermin.github.io/") { UseShellExecute = true });
-            });
-            sig.Font = MenuTheme.MonoFont;
-            sig.Tag = "sig";
-            menu.Items.Add(sig);
+            }, signature: true));
         }
 
         void ToggleDevice(BatteryReading r)
@@ -174,21 +172,6 @@ namespace Jus
             if (!settings.Hidden.Remove(r.Id)) settings.Hidden.Add(r.Id);
             settings.Save();
             widget.Show(readings.Where(x => !settings.Hidden.Contains(x.Id)));
-        }
-
-        static ToolStripMenuItem Entry(string text, Action run)
-        {
-            var item = new ToolStripMenuItem(text);
-            item.Click += (s, e) => run();
-            return item;
-        }
-
-        static ToolStripMenuItem Toggle(string text, bool on, Action run)
-        {
-            ToolStripMenuItem item = Entry(text, run);
-            item.Checked = on;
-            item.CheckOnClick = true; // la coche change sur place, le panneau reste ouvert
-            return item;
         }
 
         void Quit()
