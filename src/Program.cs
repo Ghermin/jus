@@ -13,8 +13,8 @@ using Microsoft.Win32;
 [assembly: AssemblyTitle("Jus")]
 [assembly: AssemblyProduct("Jus")]
 [assembly: AssemblyDescription("Le niveau de batterie de tous tes appareils dans la barre des tâches")]
-[assembly: AssemblyVersion("1.2.0.0")]
-[assembly: AssemblyFileVersion("1.2.0.0")]
+[assembly: AssemblyVersion("1.3.0.0")]
+[assembly: AssemblyFileVersion("1.3.0.0")]
 
 namespace Jus
 {
@@ -26,14 +26,15 @@ namespace Jus
         static int Main(string[] args)
         {
             int scan = Array.IndexOf(args, "--scan");
-            if (scan >= 0) return Scan(scan + 1 < args.Length ? args[scan + 1] : "jus-scan.txt");
+            if (scan >= 0) return Scan(scan + 1 < args.Length ? args[scan + 1] : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "jus-scan.txt"));
             int preview = Array.IndexOf(args, "--preview");
             if (preview >= 0) return Preview(preview + 1 < args.Length ? args[preview + 1] : "jus-preview.png");
             int previewMenu = Array.IndexOf(args, "--preview-menu");
             if (previewMenu >= 0) return PreviewMenu(previewMenu + 1 < args.Length ? args[previewMenu + 1] : "jus-menu.png");
             if (args.Contains("--quit")) { Signal(); return 0; }
             if (args.Contains("--uninstall")) { Installer.Uninstall(); return 0; }
-            if (!args.Contains("--portable") && !Installer.IsInstalled) { Installer.Install(Signal); return 0; }
+            // --updated : lancé par la mise à jour automatique, même chemin qu'une installation manuelle.
+            if (args.Contains("--updated") || (!args.Contains("--portable") && !Installer.IsInstalled)) { Installer.Install(Signal); return 0; }
 
             using (var mutex = new Mutex(true, MutexName, out bool first))
             {
@@ -156,36 +157,109 @@ namespace Jus
     {
         const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\Jus";
-        static readonly string Dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Jus");
+        const string TaskName = "Jus";
+        public static readonly string Dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Jus");
         static readonly string Exe = Path.Combine(Dir, "Jus.exe");
         static readonly string Shortcut = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "Jus.lnk");
+        static bool? autoStart;
 
         public static bool IsInstalled => string.Equals(Path.GetFullPath(Application.ExecutablePath), Exe, StringComparison.OrdinalIgnoreCase);
 
+        /// <summary>
+        /// Lancement à l'ouverture de session. La clé Run seule ne suffit pas : certains Windows ne la lancent jamais.
+        /// Une tâche planifiée de l'utilisateur (sans droits administrateur) prend le relais ; le mutex évite le doublon.
+        /// </summary>
         public static bool AutoStart
         {
-            get { using (RegistryKey k = Registry.CurrentUser.OpenSubKey(RunKey)) return k?.GetValue("Jus") != null; }
+            get
+            {
+                if (autoStart == null) autoStart = RunKeyPresent() || TaskExists();
+                return autoStart.Value;
+            }
             set
             {
-                using (RegistryKey k = Registry.CurrentUser.CreateSubKey(RunKey))
-                {
-                    if (value) k.SetValue("Jus", "\"" + Application.ExecutablePath + "\"");
-                    else k.DeleteValue("Jus", false);
-                }
+                SetAutoStart(value, Application.ExecutablePath);
+                autoStart = value;
             }
         }
 
+        static bool RunKeyPresent()
+        {
+            using (RegistryKey k = Registry.CurrentUser.OpenSubKey(RunKey)) return k?.GetValue("Jus") != null;
+        }
+
+        static void SetAutoStart(bool on, string exe)
+        {
+            using (RegistryKey k = Registry.CurrentUser.CreateSubKey(RunKey))
+            {
+                if (on) k.SetValue("Jus", "\"" + exe + "\"");
+                else k.DeleteValue("Jus", false);
+            }
+            if (on) CreateTask(exe);
+            else Schtasks($"/Delete /TN {TaskName} /F");
+        }
+
+        /// <summary>Copies installées avant la tâche planifiée : on l'ajoute si le lancement automatique est voulu.</summary>
+        public static void RepairAutoStart()
+        {
+            if (IsInstalled && RunKeyPresent() && !TaskExists()) CreateTask(Exe);
+        }
+
+        static bool TaskExists() => Schtasks($"/Query /TN {TaskName}") == 0;
+
+        static void CreateTask(string exe)
+        {
+            string user = System.Security.SecurityElement.Escape(System.Security.Principal.WindowsIdentity.GetCurrent().Name);
+            string xml = "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n"
+                + "<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n"
+                + "  <RegistrationInfo><Description>Lance Jus à l'ouverture de session.</Description></RegistrationInfo>\n"
+                + $"  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>{user}</UserId></LogonTrigger></Triggers>\n"
+                + $"  <Principals><Principal id=\"Author\"><UserId>{user}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>\n"
+                + "  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>"
+                + "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><AllowStartOnDemand>true</AllowStartOnDemand></Settings>\n"
+                + $"  <Actions Context=\"Author\"><Exec><Command>{System.Security.SecurityElement.Escape(exe)}</Command></Exec></Actions>\n"
+                + "</Task>\n";
+            string file = Path.Combine(Path.GetTempPath(), "jus-task.xml");
+            try
+            {
+                File.WriteAllText(file, xml, Encoding.Unicode);
+                Schtasks($"/Create /TN {TaskName} /XML \"{file}\" /F");
+            }
+            catch (IOException) { }
+            finally { try { File.Delete(file); } catch (IOException) { } }
+        }
+
+        static int Schtasks(string args)
+        {
+            try
+            {
+                using (Process p = Process.Start(new ProcessStartInfo("schtasks.exe", args) { CreateNoWindow = true, UseShellExecute = false, WindowStyle = ProcessWindowStyle.Hidden }))
+                    return p.WaitForExit(15000) ? p.ExitCode : -1;
+            }
+            catch (System.ComponentModel.Win32Exception) { return -1; }
+        }
+
+        /// <summary>Installe (ou met à jour) cette copie, sans fenêtre. Garde le choix de lancement automatique.</summary>
         public static void Install(Action stopRunning)
         {
+            bool keepAutoStart = !File.Exists(Exe) || RunKeyPresent() || TaskExists();
             stopRunning();
             Directory.CreateDirectory(Dir);
-            File.Copy(Application.ExecutablePath, Exe, true);
-            using (RegistryKey k = Registry.CurrentUser.CreateSubKey(RunKey)) k.SetValue("Jus", "\"" + Exe + "\"");
+            for (int attempt = 0; ; attempt++)
+            {
+                try { File.Copy(Application.ExecutablePath, Exe, true); break; }
+                catch (Exception e) when ((e is IOException || e is UnauthorizedAccessException) && attempt < 20)
+                {
+                    if (attempt == 8) StopInstalledCopy(); // l'ancienne version ne s'est pas fermée d'elle-même
+                    Thread.Sleep(300);
+                }
+            }
+            SetAutoStart(keepAutoStart, Exe);
             using (RegistryKey k = Registry.CurrentUser.CreateSubKey(UninstallKey))
             {
                 k.SetValue("DisplayName", "Jus");
                 k.SetValue("DisplayIcon", Exe);
-                k.SetValue("DisplayVersion", Application.ProductVersion);
+                k.SetValue("DisplayVersion", Updater.Current.ToString());
                 k.SetValue("Publisher", "Ghermin");
                 k.SetValue("InstallLocation", Dir);
                 k.SetValue("UninstallString", "\"" + Exe + "\" --uninstall");
@@ -194,6 +268,20 @@ namespace Jus
             }
             CreateShortcut();
             Process.Start(new ProcessStartInfo(Exe) { UseShellExecute = true });
+        }
+
+        static void StopInstalledCopy()
+        {
+            int self = Process.GetCurrentProcess().Id;
+            foreach (Process p in Process.GetProcessesByName("Jus"))
+            {
+                try
+                {
+                    if (p.Id != self && string.Equals(p.MainModule.FileName, Exe, StringComparison.OrdinalIgnoreCase)) p.Kill();
+                }
+                catch (Exception) { /* déjà fermée ou inaccessible */ }
+                finally { p.Dispose(); }
+            }
         }
 
         static void CreateShortcut()
@@ -214,7 +302,7 @@ namespace Jus
             if (EventWaitHandle.TryOpenExisting(@"Local\Jus.Quit", out EventWaitHandle quit))
                 using (quit) quit.Set();
             Thread.Sleep(800);
-            using (RegistryKey k = Registry.CurrentUser.CreateSubKey(RunKey)) k.DeleteValue("Jus", false);
+            SetAutoStart(false, Exe);
             Registry.CurrentUser.DeleteSubKeyTree(UninstallKey, false);
             try { File.Delete(Shortcut); } catch (IOException) { }
             // L'exe ne peut pas s'effacer lui-même : cmd s'en charge une fois l'appli fermée.

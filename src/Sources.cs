@@ -72,6 +72,7 @@ namespace Jus
         public void Poll(List<BatteryReading> output, List<HidInfo> hid, TextWriter log)
         {
             var seen = new HashSet<string>();
+            Dictionary<string, bool> radio = ClassicConnections();
             foreach (string enumerator in new[] { "BTHENUM", "BTHLE", "BTHLEDEVICE" })
             {
                 IntPtr set = Native.SetupDiGetClassDevs(IntPtr.Zero, enumerator, IntPtr.Zero, Native.DIGCF_ALLCLASSES | Native.DIGCF_PRESENT);
@@ -86,8 +87,11 @@ namespace Jus
                         string id = InstanceId(set, ref info);
                         string address = Address(id);
                         byte[] connected = Property(set, ref info, connectedKey);
-                        bool isConnected = connected == null || connected.Length == 0 || connected[0] != 0;
-                        log?.WriteLine($"  bluetooth {address} : {value[0]} %, connecté = {isConnected}");
+                        bool? byProperty = connected == null || connected.Length == 0 ? (bool?)null : connected[0] != 0;
+                        bool? byRadio = radio.TryGetValue(address, out bool c) ? c : (bool?)null;
+                        // Windows ne tient pas toujours ces deux indications à jour : une seule qui dit « connecté » suffit.
+                        bool isConnected = byProperty == true || byRadio == true || (byProperty == null && byRadio == null);
+                        log?.WriteLine($"  bluetooth {address} : {value[0]} %, connecté selon la propriété = {byProperty}, selon la radio = {byRadio}");
                         if (!isConnected || !seen.Add(address)) continue;
                         string name = Naming.Clean(Text(set, ref info, nameKey) ?? Text(set, ref info, descKey) ?? "Appareil Bluetooth");
                         output.Add(new BatteryReading { Id = "bt:" + address, Name = name, Kind = Naming.Guess(name, DeviceKind.Headset), Percent = value[0], Source = Name });
@@ -95,6 +99,34 @@ namespace Jus
                 }
                 finally { Native.SetupDiDestroyDeviceInfoList(set); }
             }
+        }
+
+        /// <summary>État de connexion des appareils Bluetooth classiques, d'après la radio (adresse → connecté).</summary>
+        static Dictionary<string, bool> ClassicConnections()
+        {
+            var result = new Dictionary<string, bool>();
+            var search = new Native.BLUETOOTH_DEVICE_SEARCH_PARAMS
+            {
+                dwSize = Marshal.SizeOf(typeof(Native.BLUETOOTH_DEVICE_SEARCH_PARAMS)),
+                fReturnAuthenticated = true, fReturnRemembered = true, fReturnConnected = true,
+            };
+            var device = new Native.BLUETOOTH_DEVICE_INFO { dwSize = Marshal.SizeOf(typeof(Native.BLUETOOTH_DEVICE_INFO)) };
+            IntPtr find;
+            try { find = Native.BluetoothFindFirstDevice(ref search, ref device); }
+            catch (DllNotFoundException) { return result; }
+            catch (EntryPointNotFoundException) { return result; }
+            if (find == IntPtr.Zero) return result;
+            try
+            {
+                do
+                {
+                    result[device.Address.ToString("X12")] = device.fConnected;
+                    device.dwSize = Marshal.SizeOf(typeof(Native.BLUETOOTH_DEVICE_INFO));
+                }
+                while (Native.BluetoothFindNextDevice(find, ref device));
+            }
+            finally { Native.BluetoothFindDeviceClose(find); }
+            return result;
         }
 
         static string Address(string id)

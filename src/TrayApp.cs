@@ -69,6 +69,23 @@ namespace Jus
             monitor.Start();
 
             quitWait = ThreadPool.RegisterWaitForSingleObject(quit, (s, t) => ui.BeginInvoke((Action)Quit), null, -1, true);
+
+            if (Installer.IsInstalled)
+            {
+                ThreadPool.QueueUserWorkItem(_ => { Updater.CleanUp(); Installer.RepairAutoStart(); });
+                updates = new System.Threading.Timer(_ => CheckForUpdate(), null, UpdateFirstMs, UpdateEveryMs);
+            }
+        }
+
+        const int UpdateFirstMs = 2 * 60 * 1000, UpdateEveryMs = 6 * 60 * 60 * 1000;
+        System.Threading.Timer updates;
+
+        /// <summary>Sur un fil à part : la nouvelle version ferme celle-ci par le signal de fermeture habituel.</summary>
+        static void CheckForUpdate()
+        {
+            Updater.CleanUp();
+            string exe = Updater.Fetch();
+            if (exe != null) Updater.Apply(exe);
         }
 
         void Apply(List<BatteryReading> list)
@@ -155,6 +172,7 @@ namespace Jus
         void Quit()
         {
             quitWait.Unregister(null);
+            updates?.Dispose();
             monitor.Dispose();
             widget.Dispose();
             tray.Visible = false;

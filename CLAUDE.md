@@ -30,6 +30,10 @@ Appli Windows qui affiche le niveau de batterie des appareils dans la barre des 
 
 `AssemblyVersion` dans `src/Program.cs`, commit, étiquette `vX.Y.Z` poussée → `.github/workflows/build.yml` compile et crée la release avec `Jus.exe`.
 
+Toutes les copies installées la récupèrent seules (`src/Updater.cs`) : 2 min après le lancement puis toutes les 6 h, téléchargement dans le dossier d'installation, vérification de la taille et du SHA-256 annoncés par GitHub, puis `Jus-update.exe --updated` remplace l'ancienne version et la relance. Une version publiée doit donc toujours être une version qui marche : elle part chez tout le monde.
+
+Lancement au démarrage : clé Run et tâche planifiée `Jus` à l'ouverture de session (sans droits administrateur). La clé Run seule n'est pas lancée sur tous les Windows.
+
 ## Git
 
 Dépôt public `github.com/Ghermin/jus`. Identité des commits : `Ghermin <Ghermin@users.noreply.github.com>`.

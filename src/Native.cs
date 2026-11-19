@@ -93,6 +93,30 @@ namespace Jus
         public static extern bool SetupDiGetDeviceProperty(IntPtr set, ref SP_DEVINFO_DATA info, ref DEVPROPKEY key, out uint type, byte[] buffer, int size, out int required, int flags);
         [DllImport("setupapi")] public static extern bool SetupDiDestroyDeviceInfoList(IntPtr set);
 
+        // ---------------------------------------------------------------- Bluetooth classique
+        [StructLayout(LayoutKind.Sequential)]
+        public struct BLUETOOTH_DEVICE_SEARCH_PARAMS
+        {
+            public int dwSize;
+            public bool fReturnAuthenticated, fReturnRemembered, fReturnUnknown, fReturnConnected, fIssueInquiry;
+            public byte cTimeoutMultiplier;
+            public IntPtr hRadio;
+        }
+        [StructLayout(LayoutKind.Sequential)] public struct SYSTEMTIME { public short Year, Month, DayOfWeek, Day, Hour, Minute, Second, Milliseconds; }
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        public struct BLUETOOTH_DEVICE_INFO
+        {
+            public int dwSize;
+            public ulong Address;
+            public uint ulClassofDevice;
+            public bool fConnected, fRemembered, fAuthenticated;
+            public SYSTEMTIME stLastSeen, stLastUsed;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 248)] public string szName;
+        }
+        [DllImport("BluetoothApis.dll", SetLastError = true)] public static extern IntPtr BluetoothFindFirstDevice(ref BLUETOOTH_DEVICE_SEARCH_PARAMS p, ref BLUETOOTH_DEVICE_INFO info);
+        [DllImport("BluetoothApis.dll", SetLastError = true)] public static extern bool BluetoothFindNextDevice(IntPtr find, ref BLUETOOTH_DEVICE_INFO info);
+        [DllImport("BluetoothApis.dll")] public static extern bool BluetoothFindDeviceClose(IntPtr find);
+
         // ---------------------------------------------------------------- XInput
         [StructLayout(LayoutKind.Sequential)]
         public struct XINPUT_BATTERY_INFORMATION { public byte BatteryType, BatteryLevel; }
