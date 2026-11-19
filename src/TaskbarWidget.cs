@@ -1,33 +1,28 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Drawing.Text;
 using System.Linq;
+using System.Threading;
+using System.Windows.Automation;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
 namespace Jus
 {
-    /// <summary>Fenêtre transparente posée dans la barre des tâches, juste à gauche de la zone de notification.</summary>
-    sealed class TaskbarWidget : NativeWindow, IDisposable
+    /// <summary>Le widget sur chaque barre des tâches : la principale et celles des autres écrans.</summary>
+    sealed class TaskbarWidget : IDisposable
     {
-        const int WS_CHILD = 0x40000000, WS_VISIBLE = 0x10000000, WS_CLIPSIBLINGS = 0x04000000;
-        const int WS_EX_LAYERED = 0x80000, WS_EX_TOOLWINDOW = 0x80, WS_EX_NOACTIVATE = 0x08000000;
-        const uint SWP_NOACTIVATE = 0x10, SWP_SHOWWINDOW = 0x40, SWP_HIDEWINDOW = 0x80;
-        const int WM_LBUTTONUP = 0x202, WM_RBUTTONUP = 0x205, WM_MOUSEACTIVATE = 0x21, MA_NOACTIVATE = 3;
-        const int WM_MOUSEMOVE = 0x200, WM_MOUSELEAVE = 0x2A3, TME_LEAVE = 2;
-
-        readonly Timer timer = new Timer { Interval = 1000 };
+        readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer { Interval = 1000 };
+        readonly List<BarWindow> bars = new List<BarWindow>();
         List<BatteryReading> items = new List<BatteryReading>();
-        IntPtr taskbar;
-        string painted = "";
-        int paintedWidth;
-        bool hover;
+        BarWindow clicked;
 
-        /// <summary>Le coin haut droit du widget : le panneau s'ouvre juste au-dessus.</summary>
-        public Point PanelAnchor => Native.GetWindowRect(Handle, out Native.RECT r) ? new Point(r.Right, r.Top) : Cursor.Position;
+        /// <summary>Le coin haut droit du widget cliqué : le panneau s'ouvre juste au-dessus, sur le même écran.</summary>
+        public Point PanelAnchor => (clicked != null && bars.Contains(clicked) ? clicked : bars.FirstOrDefault())?.Anchor ?? Cursor.Position;
 
         public event Action Clicked;
 
@@ -44,63 +39,36 @@ namespace Jus
             Sync();
         }
 
-        /// <summary>Recrée la fenêtre si l'Explorateur a redémarré, puis la replace et la redessine si besoin.</summary>
+        /// <summary>Suit les barres qui apparaissent ou disparaissent (écran branché, Explorateur relancé), puis les redessine.</summary>
         void Sync()
         {
-            IntPtr bar = Native.FindWindow("Shell_TrayWnd", null);
-            if (bar == IntPtr.Zero) return;
-            if (Handle != IntPtr.Zero && (!Native.IsWindow(Handle) || Native.GetParent(Handle) != bar))
+            List<IntPtr> taskbars = Taskbars();
+            TrayEdges.Watch(taskbars.Skip(1));
+            foreach (BarWindow b in bars.Where(b => !taskbars.Contains(b.Taskbar) || !b.Alive).ToList())
             {
-                ReleaseHandle();
-                painted = "";
+                b.Dispose();
+                bars.Remove(b);
             }
-            if (Handle == IntPtr.Zero)
+            for (int i = 0; i < taskbars.Count; i++)
             {
-                taskbar = bar;
-                CreateHandle(new CreateParams
-                {
-                    Caption = "Jus", Parent = bar,
-                    Style = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
-                    ExStyle = WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-                });
+                if (bars.Any(b => b.Taskbar == taskbars[i])) continue;
+                var bar = new BarWindow(taskbars[i], i == 0);
+                bar.Clicked += () => { clicked = bar; Clicked?.Invoke(); };
+                bars.Add(bar);
             }
-            Render();
+            foreach (BarWindow b in bars) b.Render(items);
         }
 
-        void Render()
+        /// <summary>La barre principale d'abord, puis celle de chaque autre écran.</summary>
+        static List<IntPtr> Taskbars()
         {
-            if (!Native.GetClientRect(taskbar, out Native.RECT client)) return;
-            int barHeight = client.Bottom - client.Top;
-            float scale = Math.Max(1f, Native.GetDpiForWindow(taskbar) / 96f);
-            bool light = LightTaskbar();
-
-            if (items.Count == 0 || barHeight > client.Right - client.Left) // rien à montrer, ou barre verticale
-            {
-                Native.SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_HIDEWINDOW);
-                painted = "";
-                return;
-            }
-
-            string state = $"{barHeight}|{scale}|{light}|{hover}|" + string.Join(";", items.Select(i => $"{i.Kind},{i.Text},{i.Charging}"));
-            if (state == painted)
-            {
-                Place(paintedWidth, barHeight, scale);
-                return;
-            }
-            using (Bitmap bmp = Paint(items, barHeight, scale, light, hover))
-            {
-                Place(bmp.Width, barHeight, scale);
-                Present(bmp);
-                paintedWidth = bmp.Width;
-                painted = state;
-            }
-        }
-
-        /// <summary>À chaque passage : la barre des tâches repasse parfois devant ses fenêtres enfants.</summary>
-        void Place(int width, int height, float scale)
-        {
-            Rectangle t = Target(width, height, scale);
-            Native.SetWindowPos(Handle, IntPtr.Zero, t.X, t.Y, t.Width, t.Height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            var list = new List<IntPtr>();
+            IntPtr main = Native.FindWindow("Shell_TrayWnd", null);
+            if (main == IntPtr.Zero) return list;
+            list.Add(main);
+            for (IntPtr h = IntPtr.Zero; (h = Native.FindWindowEx(IntPtr.Zero, h, "Shell_SecondaryTrayWnd", null)) != IntPtr.Zero;)
+                list.Add(h);
+            return list;
         }
 
         /// <summary>Dessine les appareils sur fond transparent.</summary>
@@ -160,22 +128,118 @@ namespace Jus
             }
         }
 
+        public static bool LightTaskbar()
+        {
+            using (RegistryKey k = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
+                return k?.GetValue("SystemUsesLightTheme") is int v && v != 0;
+        }
+
+        public void Dispose()
+        {
+            timer.Dispose();
+            foreach (BarWindow b in bars) b.Dispose();
+            bars.Clear();
+        }
+    }
+
+    /// <summary>Fenêtre transparente posée dans une barre des tâches, juste à gauche de l'horloge et des icônes.</summary>
+    sealed class BarWindow : NativeWindow, IDisposable
+    {
+        const int WS_CHILD = 0x40000000, WS_VISIBLE = 0x10000000, WS_CLIPSIBLINGS = 0x04000000;
+        const int WS_EX_LAYERED = 0x80000, WS_EX_TOOLWINDOW = 0x80, WS_EX_NOACTIVATE = 0x08000000;
+        const uint SWP_NOACTIVATE = 0x10, SWP_SHOWWINDOW = 0x40, SWP_HIDEWINDOW = 0x80;
+        const int WM_LBUTTONUP = 0x202, WM_RBUTTONUP = 0x205, WM_MOUSEACTIVATE = 0x21, MA_NOACTIVATE = 3;
+        const int WM_MOUSEMOVE = 0x200, WM_MOUSELEAVE = 0x2A3, TME_LEAVE = 2;
+
+        public readonly IntPtr Taskbar;
+        readonly bool primary;
+        List<BatteryReading> items = new List<BatteryReading>();
+        string painted = "";
+        int paintedWidth;
+        bool hover;
+
+        public event Action Clicked;
+
+        public BarWindow(IntPtr taskbar, bool primary)
+        {
+            Taskbar = taskbar;
+            this.primary = primary;
+            CreateHandle(new CreateParams
+            {
+                Caption = "Jus", Parent = taskbar,
+                Style = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+                ExStyle = WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            });
+        }
+
+        /// <summary>Faux si l'Explorateur a redémarré : la fenêtre est à recréer.</summary>
+        public bool Alive => Handle != IntPtr.Zero && Native.IsWindow(Handle) && Native.GetParent(Handle) == Taskbar;
+
+        public Point Anchor => Native.GetWindowRect(Handle, out Native.RECT r) ? new Point(r.Right, r.Top) : Cursor.Position;
+
+        public void Render(List<BatteryReading> list)
+        {
+            items = list;
+            Render();
+        }
+
+        void Render()
+        {
+            if (Handle == IntPtr.Zero || !Native.GetClientRect(Taskbar, out Native.RECT client)) return;
+            int barHeight = client.Bottom - client.Top;
+            float scale = Math.Max(1f, Native.GetDpiForWindow(Taskbar) / 96f);
+            bool light = TaskbarWidget.LightTaskbar();
+
+            if (items.Count == 0 || barHeight > client.Right - client.Left) // rien à montrer, ou barre verticale
+            {
+                Native.SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_HIDEWINDOW);
+                painted = "";
+                return;
+            }
+
+            string state = $"{barHeight}|{scale}|{light}|{hover}|" + string.Join(";", items.Select(i => $"{i.Kind},{i.Text},{i.Charging}"));
+            if (state == painted)
+            {
+                Place(paintedWidth, barHeight, scale);
+                return;
+            }
+            using (Bitmap bmp = TaskbarWidget.Paint(items, barHeight, scale, light, hover))
+            {
+                Place(bmp.Width, barHeight, scale);
+                Present(bmp);
+                paintedWidth = bmp.Width;
+                painted = state;
+            }
+        }
+
+        /// <summary>À chaque passage : la barre des tâches repasse parfois devant ses fenêtres enfants.</summary>
+        void Place(int width, int height, float scale)
+        {
+            Rectangle t = Target(width, height, scale);
+            Native.SetWindowPos(Handle, IntPtr.Zero, t.X, t.Y, t.Width, t.Height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        }
+
         Rectangle Target(int width, int height, float scale)
         {
-            IntPtr tray = Native.FindWindowEx(taskbar, IntPtr.Zero, "TrayNotifyWnd", null);
             int right;
+            IntPtr tray = primary ? Native.FindWindowEx(Taskbar, IntPtr.Zero, "TrayNotifyWnd", null) : IntPtr.Zero;
             if (tray != IntPtr.Zero && Native.GetWindowRect(tray, out Native.RECT r))
-            {
-                var p = new Native.POINT(r.Left, r.Top);
-                Native.MapWindowPoints(IntPtr.Zero, taskbar, ref p, 1);
-                right = p.X;
-            }
+                right = ToClient(r.Left);
+            else if (!primary && TrayEdges.Left(Taskbar) is int edge)
+                right = ToClient(edge); // Windows 11 : l'horloge des autres écrans n'est pas une fenêtre, on la trouve par UI Automation
             else
             {
-                Native.GetClientRect(taskbar, out Native.RECT c);
-                right = c.Right - (int)(240 * scale);
+                Native.GetClientRect(Taskbar, out Native.RECT c);
+                right = c.Right - (int)((primary ? 240 : 110) * scale);
             }
             return new Rectangle(right - width - (int)(4 * scale), 0, width, height);
+        }
+
+        int ToClient(int screenX)
+        {
+            var p = new Native.POINT(screenX, 0);
+            Native.MapWindowPoints(IntPtr.Zero, Taskbar, ref p, 1);
+            return p.X;
         }
 
         void Present(Bitmap bmp)
@@ -200,12 +264,6 @@ namespace Jus
             }
         }
 
-        public static bool LightTaskbar()
-        {
-            using (RegistryKey k = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
-                return k?.GetValue("SystemUsesLightTheme") is int v && v != 0;
-        }
-
         protected override void WndProc(ref Message m)
         {
             if (m.Msg == WM_MOUSEACTIVATE) { m.Result = (IntPtr)MA_NOACTIVATE; return; }
@@ -223,10 +281,60 @@ namespace Jus
 
         public void Dispose()
         {
-            timer.Dispose();
-            if (Handle != IntPtr.Zero) DestroyHandle();
+            if (Handle == IntPtr.Zero) return;
+            if (Native.IsWindow(Handle)) DestroyHandle(); else ReleaseHandle();
         }
     }
+
+    /// <summary>
+    /// Bord gauche de l'horloge et des icônes sur les barres des autres écrans. Sous Windows 11 ce ne sont pas des fenêtres :
+    /// on les cherche par UI Automation, sur un fil à part (jamais sur celui de l'interface, qui partage la file d'entrée de
+    /// l'Explorateur), toutes les 3 s.
+    /// </summary>
+    static class TrayEdges
+    {
+        static readonly ConcurrentDictionary<IntPtr, int> edges = new ConcurrentDictionary<IntPtr, int>();
+        static volatile IntPtr[] watched = new IntPtr[0];
+        static Thread thread;
+
+        public static int? Left(IntPtr taskbar) => edges.TryGetValue(taskbar, out int x) ? x : (int?)null;
+
+        public static void Watch(IEnumerable<IntPtr> taskbars)
+        {
+            watched = taskbars.ToArray();
+            if (thread != null || watched.Length == 0) return;
+            thread = new Thread(Loop) { IsBackground = true, Name = "Jus.TrayEdges" };
+            thread.Start();
+        }
+
+        static void Loop()
+        {
+            var tray = new PropertyCondition(AutomationElement.AutomationIdProperty, "SystemTrayIcon");
+            while (true)
+            {
+                IntPtr[] bars = watched;
+                foreach (IntPtr key in edges.Keys.Where(k => !bars.Contains(k)).ToList()) edges.TryRemove(key, out _);
+                foreach (IntPtr bar in bars)
+                {
+                    try
+                    {
+                        AutomationElement root = AutomationElement.FromHandle(bar);
+                        System.Windows.Rect barRect = root.Current.BoundingRectangle;
+                        double left = double.MaxValue;
+                        foreach (AutomationElement e in root.FindAll(TreeScope.Descendants, tray))
+                        {
+                            System.Windows.Rect r = e.Current.BoundingRectangle;
+                            if (!r.IsEmpty && r.Width > 0 && r.Left > barRect.Left + barRect.Width / 2) left = Math.Min(left, r.Left);
+                        }
+                        if (left < double.MaxValue) edges[bar] = (int)left; else edges.TryRemove(bar, out _);
+                    }
+                    catch { edges.TryRemove(bar, out _); }
+                }
+                Thread.Sleep(3000);
+            }
+        }
+    }
+
 
     /// <summary>Les petites icônes, dessinées en vectoriel pour rester nettes à toutes les échelles.</summary>
     static class Glyphs
@@ -272,10 +380,6 @@ namespace Jus
                         g.DrawLine(pen, 10, 6.5f, 10.1f, 6.5f);
                         g.DrawLine(pen, 12.5f, 6.5f, 12.6f, 6.5f);
                         g.DrawLine(pen, 5, 9.7f, 11, 9.7f);
-                        break;
-                    case DeviceKind.Laptop:
-                        Round(g, pen, 3, 3, 10, 8, 1.2f);
-                        g.DrawLine(pen, 1, 13.2f, 15, 13.2f);
                         break;
                     default:
                         Round(g, pen, 1, 4.5f, 12, 7, 1.8f);

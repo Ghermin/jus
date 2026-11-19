@@ -13,7 +13,7 @@ using Microsoft.Win32;
 [assembly: AssemblyTitle("Jus")]
 [assembly: AssemblyProduct("Jus")]
 [assembly: AssemblyDescription("Le niveau de batterie de tous tes appareils dans la barre des tâches")]
-[assembly: AssemblyVersion("1.4.0.0")]
+[assembly: AssemblyVersion("1.5.0.0")]
 [assembly: AssemblyFileVersion("1.4.0.0")]
 
 namespace Jus
@@ -31,6 +31,8 @@ namespace Jus
             if (preview >= 0) return Preview(preview + 1 < args.Length ? args[preview + 1] : "jus-preview.png");
             int previewMenu = Array.IndexOf(args, "--preview-menu");
             if (previewMenu >= 0) return PreviewMenu(previewMenu + 1 < args.Length ? args[previewMenu + 1] : "jus-menu.png");
+            int previewWizard = Array.IndexOf(args, "--preview-8bitdo");
+            if (previewWizard >= 0) return PreviewWizard(previewWizard + 1 < args.Length ? args[previewWizard + 1] : "jus-8bitdo.png");
             if (args.Contains("--quit")) { Signal(); return 0; }
             if (args.Contains("--uninstall")) { Installer.Uninstall(); return 0; }
             // --updated : lancé par la mise à jour automatique, même chemin qu'une installation manuelle.
@@ -95,6 +97,39 @@ namespace Jus
             return 0;
         }
 
+        /// <summary>Diagnostic : la fenêtre du patch 8BitDo, avant puis pendant l'installation.</summary>
+        static int PreviewWizard(string file)
+        {
+            Application.EnableVisualStyles();
+            using (var before = new EightBitDoWizard())
+            using (var during = new EightBitDoWizard())
+            {
+                during.Demo();
+                foreach (var form in new[] { before, during })
+                {
+                    form.StartPosition = FormStartPosition.Manual;
+                    form.Location = new Point(-10000, -10000); // hors de l'écran : les contrôles doivent exister pour être dessinés
+                    form.ShowInTaskbar = false;
+                    form.Show();
+                }
+                Application.DoEvents();
+                Size size = before.Size;
+                using (var sheet = new Bitmap(size.Width * 2 + 60, size.Height + 40))
+                using (Graphics g = Graphics.FromImage(sheet))
+                {
+                    g.Clear(Color.FromArgb(128, 128, 128));
+                    foreach (var (form, x) in new[] { (before, 20), (during, size.Width + 40) })
+                        using (var bmp = new Bitmap(size.Width, size.Height))
+                        {
+                            form.DrawToBitmap(bmp, new Rectangle(Point.Empty, size));
+                            g.DrawImage(bmp, x, 20);
+                        }
+                    sheet.Save(file, System.Drawing.Imaging.ImageFormat.Png);
+                }
+            }
+            return 0;
+        }
+
         static Bitmap RenderMenu(Palette palette)
         {
             var samples = new List<BatteryReading>
@@ -131,7 +166,6 @@ namespace Jus
                 new BatteryReading { Kind = DeviceKind.Headset, Percent = 30, Charging = true },
                 new BatteryReading { Kind = DeviceKind.Earbuds, Percent = 12 },
                 new BatteryReading { Kind = DeviceKind.Gamepad, Percent = 65, Approximate = true },
-                new BatteryReading { Kind = DeviceKind.Laptop, Percent = 81 },
                 new BatteryReading { Kind = DeviceKind.Gamepad, NoLevel = true, PluggedIn = true },
                 new BatteryReading { Kind = DeviceKind.Gamepad, NoLevel = true },
             };

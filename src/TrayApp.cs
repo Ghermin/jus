@@ -13,7 +13,7 @@ namespace Jus
     sealed class PanelActions
     {
         public Action<BatteryReading> ToggleDevice = r => { };
-        public Action Refresh = () => { }, ToggleAlerts = () => { }, ToggleAutoStart = () => { }, Quit = () => { };
+        public Action Refresh = () => { }, ToggleAlerts = () => { }, ToggleAutoStart = () => { }, Quit = () => { }, EightBitDo = () => { };
     }
 
     /// <summary>L'appli : icône près de l'horloge, panneau, alertes et réglages.</summary>
@@ -34,6 +34,7 @@ namespace Jus
         readonly RegisteredWaitHandle quitWait;
         readonly PanelActions actions;
         List<BatteryReading> readings = new List<BatteryReading>();
+        EightBitDoWizard wizard;
 
         public TrayApp(EventWaitHandle quitSignal)
         {
@@ -48,6 +49,7 @@ namespace Jus
                 ToggleAlerts = () => { settings.Alerts = !settings.Alerts; settings.Save(); },
                 ToggleAutoStart = () => Installer.AutoStart = !Installer.AutoStart,
                 Quit = Quit,
+                EightBitDo = () => { menu.Close(); ShowWizard(); },
             };
 
             theme.Attach(menu);
@@ -95,6 +97,14 @@ namespace Jus
             if (menu.Visible) Fill(menu, theme, readings, settings.Hidden, settings.Alerts, Installer.AutoStart, actions); // le panneau reste à jour s'il est ouvert
             tray.Text = Shorten(list.Count == 0 ? "Jus : aucun appareil détecté" : string.Join("\n", list.Select(r => r.Name + " : " + r.Text)));
 
+            // Une 8BitDo sans niveau : on propose le patch une fois de soi-même, ensuite il reste dans le panneau.
+            if (list.Any(r => r.Patchable) && !settings.EightBitDoOffered)
+            {
+                settings.EightBitDoOffered = true;
+                settings.Save();
+                ShowWizard();
+            }
+
             foreach (BatteryReading r in list)
             {
                 if (r.NoLevel) continue;
@@ -102,6 +112,15 @@ namespace Jus
                 else if (settings.Alerts && r.Percent <= AlertBelow && alerted.Add(r.Id))
                     tray.ShowBalloonTip(8000, "Batterie faible", r.Name + " : plus que " + r.Text, ToolTipIcon.Warning);
             }
+        }
+
+        void ShowWizard()
+        {
+            if (wizard != null && !wizard.IsDisposed) { wizard.Activate(); return; }
+            wizard = new EightBitDoWizard();
+            wizard.FormClosed += (s, e) => { wizard = null; monitor.Refresh(); };
+            wizard.Show();
+            wizard.Activate();
         }
 
         /// <summary>NotifyIcon.Text lève une exception à partir de 64 caractères.</summary>
@@ -130,6 +149,9 @@ namespace Jus
                 BatteryReading item = r;
                 menu.Items.Add(new DeviceRow(item, theme, !hidden.Contains(item.Id), () => actions.ToggleDevice(item)));
             }
+
+            if (list.Any(r => r.Patchable))
+                menu.Items.Add(Entry("Afficher la batterie de la 8BitDo…", actions.EightBitDo));
 
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(Entry("Actualiser", actions.Refresh));
@@ -175,6 +197,7 @@ namespace Jus
             updates?.Dispose();
             monitor.Dispose();
             widget.Dispose();
+            if (wizard != null && !wizard.IsDisposed) wizard.Close();
             tray.Visible = false;
             tray.Dispose();
             ExitThread();
@@ -202,6 +225,8 @@ namespace Jus
     {
         static readonly string File_ = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Jus", "settings.txt");
         public bool Alerts = true;
+        /// <summary>Le patch de la 8BitDo a déjà été proposé : on ne rouvre plus la fenêtre de soi-même.</summary>
+        public bool EightBitDoOffered;
         public readonly HashSet<string> Hidden = new HashSet<string>();
 
         public static Settings Load()
@@ -212,6 +237,7 @@ namespace Jus
                 foreach (string line in File.ReadAllLines(File_))
                 {
                     if (line == "alerts=0") s.Alerts = false;
+                    else if (line == "8bitdo=offered") s.EightBitDoOffered = true;
                     else if (line.StartsWith("hidden=")) s.Hidden.Add(line.Substring(7));
                 }
             }
@@ -225,7 +251,7 @@ namespace Jus
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(File_));
-                File.WriteAllLines(File_, new[] { "alerts=" + (Alerts ? 1 : 0) }.Concat(Hidden.Select(h => "hidden=" + h)));
+                File.WriteAllLines(File_, new[] { "alerts=" + (Alerts ? 1 : 0) }.Concat(EightBitDoOffered ? new[] { "8bitdo=offered" } : new string[0]).Concat(Hidden.Select(h => "hidden=" + h)));
             }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }

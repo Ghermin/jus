@@ -19,6 +19,9 @@ $parse = [Microsoft.CodeAnalysis.CSharp.CSharpParseOptions]::new([Microsoft.Code
 $fx = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319"
 [Microsoft.CodeAnalysis.MetadataReference[]]$refs = 'mscorlib', 'System', 'System.Core', 'System.Drawing', 'System.Windows.Forms', 'System.Web.Extensions' |
     ForEach-Object { [Microsoft.CodeAnalysis.MetadataReference]::CreateFromFile("$fx\$_.dll") }
+# UI Automation (horloge des barres des tâches des autres écrans), fournie avec WPF.
+$refs += 'UIAutomationClient', 'UIAutomationTypes', 'WindowsBase' |
+    ForEach-Object { [Microsoft.CodeAnalysis.MetadataReference]::CreateFromFile("$fx\WPF\$_.dll") }
 
 $options = [Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions]::new([Microsoft.CodeAnalysis.OutputKind]::WindowsApplication).
     WithPlatform([Microsoft.CodeAnalysis.Platform]::X64).

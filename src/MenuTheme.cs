@@ -176,6 +176,19 @@ namespace Jus
         public override Size GetPreferredSize(Size proposedSize)
             => new Size((int)(390 * DeviceDpi / 96f), base.GetPreferredSize(proposedSize).Height);
 
+        /// <summary>
+        /// WinForms décale les lignes dessinées à la main de la largeur de la marge des coches. On les ramène au bord, comme
+        /// les séparateurs : elles placent elles-mêmes leur coche et leur texte dans les colonnes des entrées du bas (Columns).
+        /// </summary>
+        protected override void OnLayout(LayoutEventArgs e)
+        {
+            int pull = Padding.Left - (int)(Columns.Edge * DeviceDpi / 96f);
+            foreach (ToolStripItem item in Items)
+                if (item is CustomRow && item.Margin.Left != -pull)
+                    item.Margin = new Padding(-pull, item.Margin.Top, item.Margin.Right, item.Margin.Bottom);
+            base.OnLayout(e);
+        }
+
         protected override void OnOpened(EventArgs e)
         {
             base.OnOpened(e);
@@ -210,29 +223,46 @@ namespace Jus
         }
     }
 
+    /// <summary>Colonnes du panneau à 96 ppp, mesurées sur les entrées WinForms (« Actualiser », « Prévenir… »).</summary>
+    static class Columns
+    {
+        public const float Edge = 2;    // bord gauche des lignes dessinées à la main (comme les séparateurs)
+        public const float Check = 27;  // centre des coches
+        public const float Text = 37;   // début du texte
+        public const float Width = 386; // largeur des lignes dessinées à la main
+    }
+
+    /// <summary>Ligne dessinée à la main, posée au bord du panneau (voir PanelMenu.OnLayout).</summary>
+    abstract class CustomRow : ToolStripItem
+    {
+        protected float S => (Owner?.DeviceDpi ?? 96) / 96f;
+        /// <summary>Position, dans la ligne, d'une colonne du panneau.</summary>
+        protected float At(float column) => (column - Columns.Edge) * S;
+    }
+
     /// <summary>En-tête du panneau : le nom de l'appli et le nombre d'appareils.</summary>
-    sealed class HeaderRow : ToolStripItem
+    sealed class HeaderRow : CustomRow
     {
         readonly MenuTheme theme;
         readonly string right;
 
         public HeaderRow(MenuTheme theme, string right) { this.theme = theme; this.right = right; }
 
-        float S => (Owner?.DeviceDpi ?? 96) / 96f;
         public override bool CanSelect => false;
         protected override bool DismissWhenClicked => false;
-        public override Size GetPreferredSize(Size constrainingSize) => new Size((int)(346 * S), (int)(30 * S));
+        public override Size GetPreferredSize(Size constrainingSize) => new Size((int)(Columns.Width * S), (int)(30 * S));
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            var box = new Rectangle((int)(5 * S), 0, Width - (int)(17 * S), Height);
+            int left = (int)At(Columns.Text);
+            var box = new Rectangle(left, 0, Width - left - (int)(12 * S), Height);
             TextRenderer.DrawText(e.Graphics, "Jus", MenuTheme.TitleFont, box, theme.P.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
             TextRenderer.DrawText(e.Graphics, right, MenuTheme.TextFont, box, theme.P.Muted, TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
         }
     }
 
     /// <summary>Une ligne par appareil : coche, icône, nom, pourcentage et barre de niveau.</summary>
-    sealed class DeviceRow : ToolStripItem
+    sealed class DeviceRow : CustomRow
     {
         const TextFormatFlags Flat = TextFormatFlags.NoPadding | TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine;
 
@@ -251,9 +281,8 @@ namespace Jus
             ToolTipText = "Afficher dans la barre des tâches";
         }
 
-        float S => (Owner?.DeviceDpi ?? 96) / 96f;
         protected override bool DismissWhenClicked => false; // le panneau reste ouvert pour cocher plusieurs appareils
-        public override Size GetPreferredSize(Size constrainingSize) => new Size((int)(346 * S), (int)(48 * S));
+        public override Size GetPreferredSize(Size constrainingSize) => new Size((int)(Columns.Width * S), (int)(48 * S));
 
         protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
         protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
@@ -281,11 +310,11 @@ namespace Jus
             Font valueFont = reading.NoLevel ? MenuTheme.TextFont : MenuTheme.TitleFont;
             Color valueColor = reading.PluggedIn ? text : reading.NoLevel ? p.Muted : tone;
 
-            if (shown) MenuTheme.Check(g, p.Text, 15 * s, Height / 2f, s);
+            if (shown) MenuTheme.Check(g, p.Text, At(Columns.Check), Height / 2f, s);
             float iconSize = 20 * s;
-            Glyphs.Draw(g, reading.Kind, 32 * s, (Height - iconSize) / 2, iconSize, tone);
+            Glyphs.Draw(g, reading.Kind, At(Columns.Text) - 2 * s, (Height - iconSize) / 2, iconSize, tone); // le dessin a 2 px de marge
 
-            float left = 62 * s, right = Width - 12 * s;
+            float left = At(Columns.Text) + 28 * s, right = Width - 12 * s;
             int top = (int)(7 * s), line = (int)(20 * s);
             Size size = TextRenderer.MeasureText(g, value, valueFont, Size.Empty, TextFormatFlags.NoPadding);
             int percentX = (int)(right - size.Width);

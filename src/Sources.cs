@@ -9,7 +9,7 @@ using System.Threading;
 
 namespace Jus
 {
-    enum DeviceKind { Mouse, Keyboard, Headset, Earbuds, Gamepad, Laptop, Other }
+    enum DeviceKind { Mouse, Keyboard, Headset, Earbuds, Gamepad, Other }
 
     sealed class BatteryReading
     {
@@ -17,6 +17,8 @@ namespace Jus
         public DeviceKind Kind = DeviceKind.Other;
         public int Percent;
         public bool Charging, Approximate;
+        /// <summary>8BitDo Ultimate 2C qui pourrait donner sa batterie avec le patch (voir EightBitDo).</summary>
+        public bool Patchable;
         /// <summary>Appareil bien présent, mais qui ne donne pas son niveau à Windows.</summary>
         public bool NoLevel;
         /// <summary>Reliée par un câble : une prise remplace le pourcentage.</summary>
@@ -178,6 +180,10 @@ namespace Jus
                 if (info[user].BatteryType == 1) wired.Add(user);
             }
             if (copies > 0) log?.WriteLine($"  manettes virtuelles ignorées : {copies}");
+
+            // Une 8BitDo restée en mode mise à jour (écriture du patch interrompue) : l'entrée du panneau permet de terminer.
+            if (!EightBitDo.Busy && hid.Any(h => h.Vid == EightBitDo.Vid && h.Pid == EightBitDo.BootPid))
+                output.Add(new BatteryReading { Id = "8bitdo:boot", Name = "8BitDo (mise à jour à terminer)", Kind = DeviceKind.Gamepad, Source = Name, NoLevel = true, Patchable = true });
             var skipped = new HashSet<int>(wired.Skip(Math.Max(0, wired.Count - copies)));
 
             for (int user = 0; user < 4; user++)
@@ -194,6 +200,8 @@ namespace Jus
                     {
                         Id = "xinput:" + user, Name = PadName(hid, user), Kind = DeviceKind.Gamepad, Source = Name,
                         NoLevel = level == null, Percent = level ?? 0, PluggedIn = plugged,
+                        // Sans fil sans niveau : la manette ou le dongle n'a pas le patch. Par câble : on lit la manette.
+                        Patchable = eightBitDo && !EightBitDo.Busy && (plugged ? cablePatched == false : level == null),
                     });
                     continue;
                 }
@@ -228,13 +236,20 @@ namespace Jus
         /// </summary>
         int? EightBitDoLevel(List<HidInfo> hid, TextWriter log)
         {
-            if (Environment.TickCount - levelAsked > LevelEveryMs || log != null) Remember(AskEightBitDo(hid, log));
+            if (EightBitDo.Busy) return level; // un patch est en cours : on ne parle pas à la manette
+            if (Environment.TickCount - levelAsked > LevelEveryMs || log != null)
+            {
+                Remember(AskEightBitDo(hid, log));
+                // Dongle patché et manette d'origine : l'octet 9 porte alors une somme de contrôle, qui peut valoir 0xBA par
+                // hasard. Une deuxième réponse signée, un autre paquet plus tard, écarte ce faux niveau.
+                if (level != null) { int first = level.Value; Remember(AskEightBitDo(hid, log)); if (level != null) level = first; }
+            }
             return level;
         }
 
         const int LevelEveryMs = 20000;   // la batterie change lentement, et la réponse vient de la RAM du dongle
         string cableLayout;
-        bool? cable;
+        bool? cable, cablePatched;
         int? level;
         int levelAsked = Environment.TickCount - LevelEveryMs - 1;
 
@@ -244,12 +259,25 @@ namespace Jus
             if (reply == null) { cable = null; level = null; return; }
             int product = reply[6] | reply[7] << 8;
             cable = product == 0x301B ? true : product == 0x301C ? false : (bool?)null;
-            level = product == 0x301C && reply.Length > 9 && reply[9] == 0xBA && reply[8] <= 100 ? reply[8] : (int?)null;
+            level = product == 0x301C && reply.Length > 9 && reply[9] == EightBitDo.Magic && reply[8] <= 100 ? reply[8] : (int?)null;
+            // Par câble : la manette a-t-elle le patch ? (lecture de 4 octets de sa flash, à chaque branchement)
+            if (product != 0x301B) cablePatched = null;
+            else if (!EightBitDo.Busy) cablePatched = AskCablePatched();
         }
 
-        static byte[] AskEightBitDo(List<HidInfo> hid, TextWriter log)
+        HidInfo eightBitDoInfo;
+
+        bool? AskCablePatched()
         {
+            if (eightBitDoInfo == null) return null;
+            using (HidDevice dev = HidDevice.Open(eightBitDoInfo)) return dev == null ? null : EightBitDo.PadPatched(dev);
+        }
+
+        byte[] AskEightBitDo(List<HidInfo> hid, TextWriter log)
+        {
+            if (EightBitDo.Busy) return null;
             HidInfo info = hid.FirstOrDefault(h => h.Vid == 0x2DC8 && h.Pid == 0x310A && h.UsagePage == 0xFF7A && h.InputLen >= 64 && h.OutputLen >= 64);
+            eightBitDoInfo = info;
             if (info == null) return null;
             using (HidDevice dev = HidDevice.Open(info))
             {
@@ -390,12 +418,27 @@ namespace Jus
             }
             if (!ReadBattery(dev, index, slot, out int percent, out bool charging, out bool approx))
             {
-                slots.Remove(key); // éteint ou déconnecté : on redécouvrira au prochain passage
+                // Une souris en veille (quelques secondes sans bouger) ne répond plus mais reste appairée : on garde sa
+                // dernière valeur lue tant que le récepteur est branché. Elle se met à jour dès qu'elle se réveille.
+                if (lastRead.TryGetValue(key, out BatteryReading last))
+                {
+                    log?.WriteLine($"  logitech {index} : {slot.Name}, pas de réponse (veille), dernière valeur {last.Percent} %");
+                    output.Add(Copy(last));
+                }
                 return;
             }
             log?.WriteLine($"  logitech {index} : {slot.Name}, fonction {slot.FeatureId:X4}, {percent} %");
-            output.Add(new BatteryReading { Id = "logi:" + key, Name = slot.Name, Kind = slot.Kind, Percent = percent, Charging = charging, Approximate = approx, Source = Name });
+            var reading = new BatteryReading { Id = "logi:" + key, Name = slot.Name, Kind = slot.Kind, Percent = percent, Charging = charging, Approximate = approx, Source = Name };
+            lastRead[key] = reading;
+            output.Add(Copy(reading));
         }
+
+        readonly Dictionary<string, BatteryReading> lastRead = new Dictionary<string, BatteryReading>();
+
+        static BatteryReading Copy(BatteryReading r) => new BatteryReading
+        {
+            Id = r.Id, Name = r.Name, Kind = r.Kind, Percent = r.Percent, Charging = r.Charging, Approximate = r.Approximate, Source = r.Source,
+        };
 
         Slot Discover(HidDevice dev, byte index)
         {
@@ -641,20 +684,6 @@ namespace Jus
                 if (percent >= 0 && percent <= 100) return percent;
             }
             return -1;
-        }
-    }
-
-    // ---------------------------------------------------------------- Batterie du PC portable
-
-    sealed class SystemSource : IBatterySource
-    {
-        public string Name => "Windows";
-
-        public void Poll(List<BatteryReading> output, List<HidInfo> hid, TextWriter log)
-        {
-            if (!Native.GetSystemPowerStatus(out Native.SYSTEM_POWER_STATUS s)) return;
-            if ((s.BatteryFlag & 128) != 0 || s.BatteryFlag == 255 || s.BatteryLifePercent > 100) return;
-            output.Add(new BatteryReading { Id = "pc", Name = "Ce PC", Kind = DeviceKind.Laptop, Percent = s.BatteryLifePercent, Charging = (s.BatteryFlag & 8) != 0, Source = Name });
         }
     }
 }

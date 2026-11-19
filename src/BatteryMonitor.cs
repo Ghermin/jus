@@ -24,7 +24,7 @@ namespace Jus
         // Les sources qui réveillent un appareil sans fil sont interrogées moins souvent.
         readonly Scheduled[] sources =
         {
-            new Scheduled(new SystemSource(), 30000), new Scheduled(new LogitechSource(), 10000),
+            new Scheduled(new LogitechSource(), 10000),
             new Scheduled(new SteelSeriesSource(), 4000), new Scheduled(new RazerSource(), 30000),
             new Scheduled(new PlayStationSource(), 12000), new Scheduled(new XInputSource(), 0),
             new Scheduled(new BluetoothSource(), 0), new Scheduled(new StandardHidSource(), 30000),
@@ -56,7 +56,7 @@ namespace Jus
                 devicesChanged = refreshAll = false;
                 if (changed) Thread.Sleep(SettleMs);
                 List<BatteryReading> list = Poll(null, changed, all || changed);
-                string state = string.Join("|", list.Select(r => $"{r.Id},{r.Name},{r.Text},{r.Charging}"));
+                string state = string.Join("|", list.Select(r => $"{r.Id},{r.Name},{r.Text},{r.Charging},{r.Patchable}"));
                 if (!stopping && state != last)
                 {
                     last = state;

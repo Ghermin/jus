@@ -25,14 +25,6 @@ namespace Jus
         [DllImport("kernel32", SetLastError = true)]
         public static extern bool CancelIoEx(SafeFileHandle h, IntPtr overlapped);
 
-        [StructLayout(LayoutKind.Sequential)]
-        public struct SYSTEM_POWER_STATUS
-        {
-            public byte ACLineStatus, BatteryFlag, BatteryLifePercent, SystemStatusFlag;
-            public int BatteryLifeTime, BatteryFullLifeTime;
-        }
-        [DllImport("kernel32")] public static extern bool GetSystemPowerStatus(out SYSTEM_POWER_STATUS status);
-
         // ---------------------------------------------------------------- HID
         [StructLayout(LayoutKind.Sequential)]
         public struct HIDD_ATTRIBUTES { public int Size; public ushort VendorID, ProductID, VersionNumber; }
