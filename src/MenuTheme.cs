@@ -273,15 +273,16 @@ namespace Jus
         readonly MenuTheme theme;
         readonly string text;
         readonly Action run;
-        readonly bool toggle, signature;
+        readonly bool toggle, signature, keepOpen;
         bool on, hover;
 
-        public ActionRow(MenuTheme theme, string text, Action run, bool? check = null, bool signature = false)
+        public ActionRow(MenuTheme theme, string text, Action run, bool? check = null, bool signature = false, bool keepOpen = false)
         {
             this.theme = theme;
             this.text = text;
             this.run = run;
             this.signature = signature;
+            this.keepOpen = keepOpen;
             toggle = check != null;
             on = check == true;
             Enabled = run != null;
@@ -290,7 +291,8 @@ namespace Jus
         }
 
         public override bool CanSelect => Enabled;
-        protected override bool DismissWhenClicked => !toggle; // une coche change sur place, le panneau reste ouvert
+        // Une coche change sur place, une action qui affiche où elle en est (mise à jour) aussi : le panneau reste ouvert.
+        protected override bool DismissWhenClicked => !toggle && !keepOpen;
         public override Size GetPreferredSize(Size constrainingSize) => new Size((int)(Columns.Width * S), (int)((signature ? 26 : 30) * S));
 
         protected override void OnMouseEnter(EventArgs e) { hover = Enabled; Invalidate(); base.OnMouseEnter(e); }

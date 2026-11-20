@@ -29,13 +29,19 @@ namespace Jus
 
         static string DownloadPath => Path.Combine(Installer.Dir, "Jus-update.exe");
 
-        /// <summary>Télécharge la nouvelle version s'il y en a une. Renvoie l'exe prêt à lancer, sinon null.</summary>
-        public static string Fetch()
+        /// <summary>
+        /// Télécharge la nouvelle version s'il y en a une. Renvoie l'exe prêt à lancer, sinon null.
+        /// <paramref name="latest"/> = dernière version publiée, null si GitHub n'a pas répondu.
+        /// </summary>
+        public static string Fetch(out Version latest)
         {
+            latest = null;
             try
             {
                 Asset asset = Latest();
-                if (asset == null || asset.Version <= Current) return null;
+                if (asset == null) return null;
+                latest = asset.Version;
+                if (asset.Version <= Current) return null;
                 Download(asset, DownloadPath);
                 return DownloadPath;
             }

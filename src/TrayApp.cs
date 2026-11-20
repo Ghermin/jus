@@ -14,6 +14,11 @@ namespace Jus
     {
         public Action<BatteryReading> ToggleDevice = r => { };
         public Action Refresh = () => { }, ToggleAlerts = () => { }, ToggleAutoStart = () => { }, Quit = () => { }, EightBitDo = () => { };
+        /// <summary>Null : pas de ligne de mise à jour (copie portable).</summary>
+        public Action Update = () => { };
+        public string UpdateText = "Rechercher une mise à jour";
+        /// <summary>Recherche ou téléchargement en cours : la ligne est grisée.</summary>
+        public bool UpdateBusy;
     }
 
     /// <summary>L'appli : icône près de l'horloge, panneau, alertes et réglages.</summary>
@@ -50,6 +55,7 @@ namespace Jus
                 ToggleAutoStart = () => Installer.AutoStart = !Installer.AutoStart,
                 Quit = Quit,
                 EightBitDo = () => { menu.Close(); ShowWizard(); },
+                Update = Installer.IsInstalled ? UpdateNow : (Action)null,
             };
 
             theme.Attach(menu);
@@ -81,13 +87,55 @@ namespace Jus
 
         const int UpdateFirstMs = 2 * 60 * 1000, UpdateEveryMs = 6 * 60 * 60 * 1000;
         System.Threading.Timer updates;
+        /// <summary>1 pendant une recherche : la vérification automatique et le bouton ne téléchargent pas en même temps.</summary>
+        int updating;
 
-        /// <summary>Sur un fil à part : la nouvelle version ferme celle-ci par le signal de fermeture habituel.</summary>
-        static void CheckForUpdate()
+        /// <summary>
+        /// Sur un fil à part : la nouvelle version ferme celle-ci par le signal de fermeture habituel, la remplace et se relance.
+        /// Renvoie la dernière version publiée (null si GitHub n'a pas répondu) et si l'installation est lancée.
+        /// </summary>
+        bool CheckForUpdate(out Version latest)
         {
-            Updater.CleanUp();
-            string exe = Updater.Fetch();
-            if (exe != null) Updater.Apply(exe);
+            latest = null;
+            if (Interlocked.Exchange(ref updating, 1) == 1) return false;
+            try
+            {
+                Updater.CleanUp();
+                string exe = Updater.Fetch(out latest);
+                if (exe == null) return false;
+                Updater.Apply(exe);
+                return true;
+            }
+            catch (Exception) { return false; }
+            finally { Interlocked.Exchange(ref updating, 0); }
+        }
+
+        void CheckForUpdate() => CheckForUpdate(out _);
+
+        /// <summary>Bouton « Rechercher une mise à jour » : la ligne dit où on en est, le panneau reste ouvert.</summary>
+        void UpdateNow()
+        {
+            if (actions.UpdateBusy) return;
+            actions.UpdateBusy = true;
+            // Plus tard : on ne vide pas le panneau pendant le clic sur une de ses lignes.
+            ui.BeginInvoke((Action)(() => ShowUpdate("Recherche d'une mise à jour…", true)));
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                bool started = CheckForUpdate(out Version latest);
+                string text =
+                    started ? $"Installation de la {latest}, Jus va redémarrer…" :
+                    latest == null ? "GitHub ne répond pas : réessayer" :
+                    latest > Updater.Current ? "Téléchargement impossible : réessayer" :
+                    "Jus est à jour : revérifier";
+                ui.BeginInvoke((Action)(() => ShowUpdate(text, started)));
+            });
+        }
+
+        void ShowUpdate(string text, bool busy)
+        {
+            actions.UpdateText = text;
+            actions.UpdateBusy = busy;
+            if (menu.Visible) Fill(menu, theme, readings, settings.Hidden, settings.Alerts, Installer.AutoStart, actions);
         }
 
         void Apply(List<BatteryReading> list)
@@ -158,6 +206,8 @@ namespace Jus
             menu.Items.Add(new ActionRow(theme, "Actualiser", actions.Refresh));
             menu.Items.Add(new ActionRow(theme, $"Prévenir sous {AlertBelow} %", actions.ToggleAlerts, alerts));
             menu.Items.Add(new ActionRow(theme, "Lancer avec Windows", actions.ToggleAutoStart, autoStart));
+            if (actions.Update != null)
+                menu.Items.Add(new ActionRow(theme, actions.UpdateText, actions.UpdateBusy ? null : actions.Update, keepOpen: true));
             menu.Items.Add(new ActionRow(theme, "Quitter", actions.Quit));
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(new ActionRow(theme, "un projet du bored dev playground", () =>
