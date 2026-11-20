@@ -547,6 +547,8 @@ namespace Jus
     {
         public string Name => "SteelSeries";
         const ushort SteelSeries = 0x1038;
+        static readonly ushort[] Arctis7Plus = { 0x220E, 0x2212, 0x2216, 0x2236 };
+        static readonly ushort[] NovaFiveSteps = { 0x2202, 0x2206, 0x220A, 0x223A, 0x227A };
 
         public void Poll(List<BatteryReading> output, List<HidInfo> hid, TextWriter log)
         {
@@ -565,13 +567,26 @@ namespace Jus
                     {
                         int n = dev.Read(b, Math.Max(1, end - Environment.TickCount));
                         if (n < 5 || b[1] != 0xB0) continue;
-                        log?.WriteLine($"  steelseries {info.Pid:X4} : niveau {b[3]}, état {b[4]}");
-                        if (b[4] == 0) break; // casque éteint
-                        // Les premiers Arctis Nova 7 comptent de 0 à 4, les suivants donnent directement le pourcentage.
-                        bool fiveSteps = new ushort[] { 0x2202, 0x2206, 0x220A, 0x223A, 0x227A }.Contains(info.Pid);
+                        log?.WriteLine($"  steelseries {info.Pid:X4} : {b[2]:X2} {b[3]:X2} {b[4]:X2}");
+                        bool fiveSteps, charging;
+                        if (Arctis7Plus.Contains(info.Pid))
+                        {
+                            // Arctis 7+ / 7P+ / 7X+ : b[2] = 1 casque éteint, b[3] = niveau de 0 à 4, b[4] = 1 en charge.
+                            if (b[2] == 0x01) break;
+                            fiveSteps = true;
+                            charging = b[4] == 0x01;
+                        }
+                        else
+                        {
+                            // Arctis Nova 7 : b[3] = niveau, b[4] = état (0 éteint, 1 ou 2 en charge).
+                            if (b[4] == 0) break;
+                            // Les premiers Arctis Nova 7 comptent de 0 à 4, les suivants donnent directement le pourcentage.
+                            fiveSteps = NovaFiveSteps.Contains(info.Pid);
+                            charging = b[4] == 0x01 || b[4] == 0x02;
+                        }
                         int percent = fiveSteps ? Math.Min((int)b[3], 4) * 25 : Math.Min((int)b[3], 100);
                         string name = string.IsNullOrEmpty(info.Product) ? "Casque SteelSeries" : info.Product;
-                        output.Add(new BatteryReading { Id = "steelseries:" + info.Pid.ToString("X4"), Name = name, Kind = DeviceKind.Headset, Percent = percent, Charging = b[4] == 1, Approximate = fiveSteps, Source = Name });
+                        output.Add(new BatteryReading { Id = "steelseries:" + info.Pid.ToString("X4"), Name = name, Kind = DeviceKind.Headset, Percent = percent, Charging = charging, Approximate = fiveSteps, Source = Name });
                         break;
                     }
                 }
