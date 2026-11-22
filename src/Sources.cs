@@ -549,6 +549,8 @@ namespace Jus
         const ushort SteelSeries = 0x1038;
         static readonly ushort[] Arctis7Plus = { 0x220E, 0x2212, 0x2216, 0x2236 };
         static readonly ushort[] NovaFiveSteps = { 0x2202, 0x2206, 0x220A, 0x223A, 0x227A };
+        // Arctis 9 : 12C2 = dongle USB, 12C4 = révision plus récente (signalée par HeadsetControl, pas vérifiée).
+        static readonly ushort[] Arctis9 = { 0x12C2, 0x12C4 };
 
         public void Poll(List<BatteryReading> output, List<HidInfo> hid, TextWriter log)
         {
@@ -557,8 +559,11 @@ namespace Jus
                 using (HidDevice dev = HidDevice.Open(info))
                 {
                     if (dev == null) continue;
+                    // Arctis 9 : requête d'état 00 20 (celle de HeadsetControl), réponse AA. Les autres : 00 B0, réponse B0.
+                    bool arctis9 = Arctis9.Contains(info.Pid);
                     byte[] request = new byte[info.OutputLen];
-                    request[1] = 0xB0;
+                    request[1] = arctis9 ? (byte)0x20 : (byte)0xB0;
+                    byte reply = arctis9 ? (byte)0xAA : (byte)0xB0;
                     dev.Flush();
                     if (!dev.Write(request)) continue;
                     byte[] b = new byte[Math.Max((int)info.InputLen, 8)];
@@ -566,9 +571,18 @@ namespace Jus
                     while (Environment.TickCount - end < 0)
                     {
                         int n = dev.Read(b, Math.Max(1, end - Environment.TickCount));
-                        if (n < 5 || b[1] != 0xB0) continue;
-                        log?.WriteLine($"  steelseries {info.Pid:X4} : {b[2]:X2} {b[3]:X2} {b[4]:X2}");
+                        if (n < (arctis9 ? 6 : 5) || b[1] != reply) continue;
+                        log?.WriteLine($"  steelseries {info.Pid:X4} : {b[2]:X2} {b[3]:X2} {b[4]:X2} {b[5]:X2}");
                         bool fiveSteps, charging;
+                        if (arctis9)
+                        {
+                            // Arctis 9 : b[2] = 1 casque allumé (3 éteint : b[4] garde alors l'ancien niveau),
+                            // b[4] = niveau brut de 0x64 (0 %) à 0x9A (100 %), b[5] = état (1 en charge, 0xFF éteint d'après HeadsetControl).
+                            if (b[2] != 0x01 || b[5] == 0xFF) break;
+                            int raw = Math.Max(0x64, Math.Min((int)b[4], 0x9A));
+                            output.Add(new BatteryReading { Id = "steelseries:" + info.Pid.ToString("X4"), Name = string.IsNullOrEmpty(info.Product) ? "Casque SteelSeries" : info.Product, Kind = DeviceKind.Headset, Percent = (raw - 0x64) * 100 / (0x9A - 0x64), Charging = b[5] == 0x01, Approximate = false, Source = Name });
+                            break;
+                        }
                         if (Arctis7Plus.Contains(info.Pid))
                         {
                             // Arctis 7+ / 7P+ / 7X+ : b[2] = 1 casque éteint, b[3] = niveau de 0 à 4, b[4] = 1 en charge.

@@ -33,6 +33,7 @@ Appli Windows qui affiche le niveau de batterie des appareils dans la barre des 
 - Panneau : `AutoClose = false`, il ne se ferme que sur un clic en dehors de sa fenêtre (`PanelMenu.Watch`).
 - Logitech HID++ : `softwareId` change à chaque requête, sinon une réponse en retard d'une souris en veille passe pour la suivante.
 - Arctis Nova 7 : requête `00 B0`, réponse niveau en `b[3]`, état en `b[4]` (0 éteint, 1 en charge).
+- Arctis 9 (`1038:12C2`, dongle ; `12C4` d'après HeadsetControl, pas vérifié) : requête d'état `00 20` sur la collection `FFC0` (interface 0), celle de HeadsetControl. Réponse `AA` en `b[1]`, `b[2]` = `01` casque allumé / `03` éteint (le dongle garde alors l'ancien niveau : ne rien afficher), niveau brut en `b[4]` de `0x64` (0 %) à `0x9A` (100 %), état en `b[5]` (`1` en charge ; `0xFF` éteint d'après HeadsetControl, jamais vu). Pas de `00 B0` sur ce casque. Testé sur le dongle `12C2` : allumé `AA 01 01 6F 00` (20 %), éteint `AA 03 01 6F 00`, en charge `AA 01 01 72 01` (le niveau remonte aussitôt, tension de charge).
 - Les noms Bluetooth peuvent contenir le prénom du propriétaire : `Naming.Clean` le retire.
 
 ## Publier
