@@ -89,14 +89,13 @@ namespace Jus
             File.Delete(partial);
             using (WebClient web = Client(false)) web.DownloadFile(asset.Url, partial);
             if (new FileInfo(partial).Length != asset.Size) { File.Delete(partial); throw new IOException("téléchargement incomplet"); }
-            if (asset.Sha256 != null)
-            {
-                string hash;
-                using (SHA256 sha = SHA256.Create())
-                using (FileStream fs = File.OpenRead(partial))
-                    hash = BitConverter.ToString(sha.ComputeHash(fs)).Replace("-", "").ToLowerInvariant();
-                if (hash != asset.Sha256) { File.Delete(partial); throw new IOException("empreinte SHA-256 différente de celle annoncée par GitHub"); }
-            }
+            // Sans empreinte annoncée par GitHub, rien ne prouve que le fichier est le bon : on n'installe pas.
+            if (asset.Sha256 == null) { File.Delete(partial); throw new IOException("empreinte SHA-256 absente de la release"); }
+            string hash;
+            using (SHA256 sha = SHA256.Create())
+            using (FileStream fs = File.OpenRead(partial))
+                hash = BitConverter.ToString(sha.ComputeHash(fs)).Replace("-", "").ToLowerInvariant();
+            if (hash != asset.Sha256) { File.Delete(partial); throw new IOException("empreinte SHA-256 différente de celle annoncée par GitHub"); }
             File.Delete(path);
             File.Move(partial, path);
         }
